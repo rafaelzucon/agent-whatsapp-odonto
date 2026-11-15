@@ -1,0 +1,22 @@
+# Build
+target/
+!.mvn/wrapper/maven-wrapper.properties
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+.factorypath
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Segredos e dados locais
+.env
+*.env.local
+backups/
+logs/
