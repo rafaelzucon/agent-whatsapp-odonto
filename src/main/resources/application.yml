@@ -1,0 +1,231 @@
+# Configuração do Agente WhatsApp Odonto.
+# Valores sensíveis vêm SEMPRE de variáveis de ambiente (veja .env.example); nunca coloque segredos aqui.
+
+spring:
+  application:
+    name: agent-whatsapp-odonto
+  threads:
+    virtual:
+      enabled: true
+  main:
+    keep-alive: true
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/odonto}
+    username: ${DB_USUARIO:odonto}
+    password: ${DB_SENHA:odonto}
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAXIMO:10}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  http:
+    clients:
+      connect-timeout: 5s
+      read-timeout: 30s
+
+  # E-mail é opcional: sem SMTP_HOST o canal de e-mail fica desligado.
+  mail:
+    host: ${SMTP_HOST:}
+    port: ${SMTP_PORTA:587}
+    username: ${SMTP_USUARIO:}
+    password: ${SMTP_SENHA:}
+    properties:
+      mail.smtp.auth: ${SMTP_AUTH:true}
+      mail.smtp.starttls.enable: ${SMTP_STARTTLS:true}
+
+  # IA: Claude só classifica a queixa e interpreta datas; Whisper (OpenAI) só transcreve áudio.
+  ai:
+    model:
+      chat: anthropic
+      audio:
+        transcription: ${TRANSCRICAO_PROVEDOR:openai}
+        speech: none
+      embedding: none
+      image: none
+      moderation: none
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:}
+      chat:
+        model: ${ANTHROPIC_MODELO:claude-haiku-4-5}
+        max-tokens: 512
+        temperature: 0.0
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      audio:
+        transcription:
+          model: ${OPENAI_MODELO_TRANSCRICAO:whisper-1}
+          language: pt
+    retry:
+      max-attempts: 3
+      backoff:
+        initial-interval: 1s
+        multiplier: 2
+        max-interval: 10s
+
+server:
+  port: ${PORTA:8080}
+  shutdown: graceful
+  error:
+    include-message: never
+    include-stacktrace: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  health:
+    mail:
+      enabled: false
+  info:
+    env:
+      enabled: true
+
+info:
+  aplicacao: Agente WhatsApp Odonto
+
+logging:
+  level:
+    root: INFO
+    br.com.consultorio.odonto: ${LOG_NIVEL:INFO}
+
+odonto:
+  nome-consultorio: ${CONSULTORIO_NOME:Consultório Odontológico}
+  endereco: ${CONSULTORIO_ENDERECO:Rua Exemplo, 123 - Centro}
+  fuso-horario: ${CONSULTORIO_FUSO:America/Sao_Paulo}
+
+  whatsapp:
+    url-base: ${WHATSAPP_URL_BASE:https://graph.facebook.com}
+    versao-api: ${WHATSAPP_VERSAO_API:v24.0}
+    phone-number-id: ${WHATSAPP_PHONE_NUMBER_ID:}
+    token-acesso: ${WHATSAPP_TOKEN_ACESSO:}
+    token-verificacao: ${WHATSAPP_TOKEN_VERIFICACAO:}
+    segredo-app: ${WHATSAPP_SEGREDO_APP:}
+    # Número (DDI + DDD + número, só dígitos) que recebe os avisos do consultório.
+    numero-notificacao: ${WHATSAPP_NUMERO_CONSULTORIO:}
+    # Fora da janela de 24h a Meta só aceita templates aprovados; ligue para avisar o consultório a qualquer hora.
+    usar-template: ${WHATSAPP_USAR_TEMPLATE:false}
+    template-agendamento: ${WHATSAPP_TEMPLATE_AGENDAMENTO:aviso_agendamento}
+    template-alerta: ${WHATSAPP_TEMPLATE_ALERTA:alerta_atendimento}
+    idioma-template: ${WHATSAPP_IDIOMA_TEMPLATE:pt_BR}
+    tamanho-maximo-midia-bytes: 16777216
+
+  agenda:
+    dias-atendimento: ${AGENDA_DIAS:MONDAY,TUESDAY,WEDNESDAY,THURSDAY,FRIDAY}
+    abertura: ${AGENDA_ABERTURA:08:00}
+    fechamento: ${AGENDA_FECHAMENTO:18:00}
+    almoco-inicio: ${AGENDA_ALMOCO_INICIO:12:00}
+    almoco-fim: ${AGENDA_ALMOCO_FIM:13:00}
+    duracao-consulta: ${AGENDA_DURACAO_CONSULTA:30m}
+    antecedencia-minima: ${AGENDA_ANTECEDENCIA_MINIMA:2h}
+    # Datas no formato AAAA-MM-DD separadas por vírgula.
+    feriados: ${AGENDA_FERIADOS:}
+    dias-busca-maxima: ${AGENDA_DIAS_BUSCA:30}
+
+  conversa:
+    expiracao: ${CONVERSA_EXPIRACAO:2h}
+    max-tentativas-por-etapa: ${CONVERSA_MAX_TENTATIVAS:3}
+    confirmar-sugestao: ${CONVERSA_CONFIRMAR_SUGESTAO:true}
+    confianca-minima: ${IA_CONFIANCA_MINIMA:0.6}
+    intervalo-verificacao-expiracao: 5m
+
+  retencao:
+    mensagens-dias: ${RETENCAO_MENSAGENS_DIAS:180}
+    conversas-encerradas-dias: ${RETENCAO_CONVERSAS_DIAS:30}
+    cron: "0 30 3 * * *"
+
+  criptografia:
+    # Duas chaves diferentes de 32 bytes em Base64. Gere com: openssl rand -base64 32
+    chave-dados: ${CRIPTO_CHAVE_DADOS:}
+    chave-hash: ${CRIPTO_CHAVE_HASH:}
+
+  admin:
+    # Sem token, a API administrativa (/api/admin/**) fica desligada.
+    token: ${ADMIN_TOKEN:}
+
+  email:
+    remetente: ${EMAIL_REMETENTE:}
+    destinatarios: ${EMAIL_DESTINATARIOS:}
+
+  # Textos fixos enviados ao paciente. Marcadores substituídos automaticamente (escreva-os em maiúsculas):
+  # NOME_CONSULTORIO, NOME_PACIENTE, DATA_HORA, ENDERECO, PRONTUARIO e DICA.
+  mensagens:
+    textos:
+      boas-vindas: >-
+        Olá! Aqui é o atendimento automático do NOME_CONSULTORIO. 🦷
+        Para começar, informe o número do seu RG e a UF do órgão emissor (exemplo: 12.345.678-9 SP).
+      paciente-encontrado: >-
+        Que bom falar com você de novo NOME_PACIENTE!
+        Conte, com suas palavras, o que está sentindo ou qual é o motivo da consulta.
+      consulta-existente: >-
+        Olá NOME_PACIENTE, você já tem uma consulta marcada para DATA_HORA.
+        Deseja agendar outra consulta? Responda SIM ou NÃO.
+      pedir-problema: >-
+        Certo! Conte, com suas palavras, o que está sentindo ou qual é o motivo da consulta.
+      encerramento: >-
+        Combinado NOME_PACIENTE! Até a sua consulta de DATA_HORA no endereço ENDERECO.
+        Se precisar, é só mandar uma mensagem.
+      pedir-nome: >-
+        Não encontrei cadastro com esse RG, então vamos fazer o seu agora. É rapidinho!
+        Qual é o seu nome completo?
+      pedir-data-nascimento: >-
+        Qual é a sua data de nascimento? (exemplo: 25/03/1990)
+      pedir-responsavel: >-
+        Como o paciente é menor de 18 anos, informe o nome completo do responsável legal.
+      pedir-consentimento: >-
+        Para cadastrar e manter o prontuário, o NOME_CONSULTORIO vai guardar seus dados pessoais e de saúde
+        com segurança, apenas para o seu atendimento, conforme a LGPD (Lei 13.709/2018).
+        Você autoriza? Responda SIM ou NÃO.
+      sem-consentimento: >-
+        Tudo bem, respeitamos a sua decisão e não guardamos seus dados.
+        A nossa equipe vai entrar em contato para ajudar no agendamento.
+      cadastro-concluido: >-
+        Cadastro concluído NOME_PACIENTE! O número do seu prontuário é PRONTUARIO.
+        Agora conte, com suas palavras, o que está sentindo ou qual é o motivo da consulta.
+      emergencia: >-
+        Entendi. Pelo que você descreveu, o caso pode precisar de atendimento rápido e a nossa equipe já foi avisada.
+        Se houver sangramento que não para, inchaço que dificulta respirar ou engolir, ou febre alta,
+        procure imediatamente um pronto-socorro.
+      pedir-data-hora: >-
+        Anotado! Qual dia e horário você prefere para a consulta? (exemplos: amanhã às 9h, sexta à tarde, 20/11 às 14h)
+      sugerir-horario: >-
+        Esse horário não está disponível. O horário livre mais próximo é DATA_HORA.
+        Posso agendar? Responda SIM, ou diga outro dia e horário.
+      oferecer-horario: >-
+        O primeiro horário livre é DATA_HORA. Posso agendar? Responda SIM, ou diga outro dia e horário.
+      agendado: >-
+        Consulta agendada NOME_PACIENTE! ✅ Data: DATA_HORA. Endereço: ENDERECO.
+        Se não puder comparecer, avise por aqui.
+      nao-entendi: >-
+        Desculpe, não consegui entender. DICA
+      atendimento-humano: >-
+        Vou pedir para alguém da nossa equipe continuar o seu atendimento. Aguarde, por favor, que logo entraremos em contato.
+      sem-horario-livre: >-
+        No momento não encontrei horário livre na agenda. A nossa equipe foi avisada e vai entrar em contato para agendar.
+      pedir-texto: >-
+        Por enquanto só consigo ler mensagens de texto. Pode escrever a sua resposta, por favor?
+    dicas:
+      aguardando-rg: "Informe o número do RG seguido da UF do órgão emissor, por exemplo: 12.345.678-9 SP."
+      aguardando-nome: "Escreva o seu nome completo (nome e sobrenome), por exemplo: Maria da Silva."
+      aguardando-data-nascimento: "Escreva a data de nascimento no formato dia/mês/ano, por exemplo: 25/03/1990."
+      aguardando-responsavel: "Escreva o nome completo do responsável legal, por exemplo: João da Silva."
+      aguardando-consentimento: "Responda SIM para autorizar o cadastro ou NÃO para não autorizar."
+      aguardando-confirmacao-nova-consulta: "Responda SIM para agendar outra consulta ou NÃO para encerrar."
+      aguardando-problema: "Conte em uma frase o que está sentindo, por exemplo: dor no dente do fundo ao mastigar."
+      aguardando-data-hora: "Diga o dia e o horário desejados, por exemplo: amanhã às 9h ou 20/11 às 14h."
+      aguardando-confirmacao-sugestao: "Responda SIM para confirmar o horário sugerido ou diga outro dia e horário."
