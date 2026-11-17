@@ -3,6 +3,7 @@ package br.com.consultorio.odonto.adaptador.entrada.webhook;
 import br.com.consultorio.odonto.adaptador.entrada.webhook.WebhookPayload.Mensagem;
 import br.com.consultorio.odonto.adaptador.entrada.webhook.WebhookPayload.Valor;
 import br.com.consultorio.odonto.aplicacao.porta.entrada.MensagemRecebidaCommand;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
@@ -25,6 +26,7 @@ public class ConversorWebhook {
     private final ConfiguracaoWebhook configuracao;
     private final Clock relogio;
 
+    @Autowired
     public ConversorWebhook(JsonMapper json, ConfiguracaoWebhook configuracao) {
         this(json, configuracao, Clock.systemUTC());
     }
