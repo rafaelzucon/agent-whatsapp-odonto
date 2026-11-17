@@ -1,0 +1,23 @@
+# Um único contêiner com a aplicação e o PostgreSQL 18. Use ./odonto.sh para operar.
+services:
+  odonto:
+    build:
+      context: .
+    image: agent-whatsapp-odonto:latest
+    container_name: agent-whatsapp-odonto
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${PORTA_HOST:-8080}:8080"
+    volumes:
+      - dados-postgres:/var/lib/postgresql
+    stop_grace_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  dados-postgres:
+    name: agent-whatsapp-odonto-dados
