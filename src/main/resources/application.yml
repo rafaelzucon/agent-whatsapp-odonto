@@ -170,15 +170,15 @@ odonto:
         Olá! Aqui é o atendimento automático do NOME_CONSULTORIO. 🦷
         Para começar, informe o número do seu RG e a UF do órgão emissor (exemplo: 12.345.678-9 SP).
       paciente-encontrado: >-
-        Que bom falar com você de novo NOME_PACIENTE!
+        Que bom falar com você de novo, NOME_PACIENTE!
         Conte, com suas palavras, o que está sentindo ou qual é o motivo da consulta.
       consulta-existente: >-
-        Olá NOME_PACIENTE, você já tem uma consulta marcada para DATA_HORA.
+        Olá, NOME_PACIENTE! Você já tem uma consulta marcada para DATA_HORA.
         Deseja agendar outra consulta? Responda SIM ou NÃO.
       pedir-problema: >-
         Certo! Conte, com suas palavras, o que está sentindo ou qual é o motivo da consulta.
       encerramento: >-
-        Combinado NOME_PACIENTE! Até a sua consulta de DATA_HORA no endereço ENDERECO.
+        Combinado, NOME_PACIENTE! Até a sua consulta de DATA_HORA no endereço ENDERECO.
         Se precisar, é só mandar uma mensagem.
       pedir-nome: >-
         Não encontrei cadastro com esse RG, então vamos fazer o seu agora. É rapidinho!
@@ -195,7 +195,7 @@ odonto:
         Tudo bem, respeitamos a sua decisão e não guardamos seus dados.
         A nossa equipe vai entrar em contato para ajudar no agendamento.
       cadastro-concluido: >-
-        Cadastro concluído NOME_PACIENTE! O número do seu prontuário é PRONTUARIO.
+        Cadastro concluído, NOME_PACIENTE! O número do seu prontuário é PRONTUARIO.
         Agora conte, com suas palavras, o que está sentindo ou qual é o motivo da consulta.
       emergencia: >-
         Entendi. Pelo que você descreveu, o caso pode precisar de atendimento rápido e a nossa equipe já foi avisada.
@@ -209,7 +209,7 @@ odonto:
       oferecer-horario: >-
         O primeiro horário livre é DATA_HORA. Posso agendar? Responda SIM, ou diga outro dia e horário.
       agendado: >-
-        Consulta agendada NOME_PACIENTE! ✅ Data: DATA_HORA. Endereço: ENDERECO.
+        Consulta agendada, NOME_PACIENTE! ✅ Data: DATA_HORA. Endereço: ENDERECO.
         Se não puder comparecer, avise por aqui.
       nao-entendi: >-
         Desculpe, não consegui entender. DICA
