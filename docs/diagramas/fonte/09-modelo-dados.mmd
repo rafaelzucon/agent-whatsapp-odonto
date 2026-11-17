@@ -1,0 +1,85 @@
+erDiagram
+    PACIENTE ||--|{ PACIENTE_TELEFONE : "tem"
+    PACIENTE ||--|| PRONTUARIO : "possui"
+    PRONTUARIO ||--o{ QUEIXA_RELATADA : "registra"
+    PROBLEMA_ODONTOLOGICO ||--o{ QUEIXA_RELATADA : "classifica"
+    PACIENTE ||--o{ CONSULTA : "agenda"
+    QUEIXA_RELATADA |o--o| CONSULTA : "motiva"
+
+    PACIENTE {
+        bigint id PK
+        varchar rg_hash UK "HMAC-SHA256 (busca)"
+        text rg_cifrado "AES-256-GCM"
+        text nome_cifrado "AES-256-GCM"
+        text data_nascimento_cifrada "AES-256-GCM"
+        text responsavel_cifrado "AES-256-GCM"
+        boolean consentimento_lgpd
+        timestamptz data_consentimento
+        timestamptz data_cadastro
+    }
+    PACIENTE_TELEFONE {
+        bigint paciente_id FK
+        varchar wa_id
+    }
+    PRONTUARIO {
+        bigint id PK
+        bigint paciente_id FK,UK
+        varchar numero UK "PR-000123"
+        timestamptz data_abertura
+    }
+    QUEIXA_RELATADA {
+        bigint id PK
+        bigint prontuario_id FK
+        text texto_cifrado "AES-256-GCM"
+        varchar problema_codigo FK
+        varchar prioridade
+        float confianca
+        varchar origem "IA, PALAVRA_CHAVE, MANUAL"
+        timestamptz data_registro
+        bigint consulta_id FK
+    }
+    PROBLEMA_ODONTOLOGICO {
+        varchar codigo PK
+        varchar nome
+        text descricao
+        varchar especialidade
+        varchar prioridade
+        varchar cid10
+        text palavras_chave
+        boolean ativo
+    }
+    CONSULTA {
+        bigint id PK
+        bigint paciente_id FK
+        bigint queixa_id FK
+        timestamptz inicio "único entre AGENDADAS"
+        timestamptz fim
+        varchar status
+        timestamptz criada_em
+    }
+    BLOQUEIO_AGENDA {
+        bigint id PK
+        timestamptz inicio
+        timestamptz fim
+        varchar motivo
+    }
+    CONVERSA {
+        bigint id PK
+        varchar wa_id UK
+        varchar etapa
+        text dados_cifrados "JSON cifrado"
+        int tentativas_invalidas
+        timestamptz ultima_interacao
+        timestamptz iniciada_em
+    }
+    MENSAGEM {
+        bigint id PK
+        varchar wa_message_id UK "deduplicação"
+        varchar wa_id
+        varchar direcao
+        varchar tipo
+        text texto_cifrado
+        varchar midia_id
+        boolean automatica
+        timestamptz criada_em
+    }

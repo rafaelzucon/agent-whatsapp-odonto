@@ -1,0 +1,23 @@
+flowchart TB
+    internet(("Internet"))
+    subgraph host["Servidor (Linux com Docker)"]
+        proxy["Proxy reverso HTTPS<br/>(Caddy, Nginx ou Cloudflare Tunnel)"]
+        subgraph cont["Contêiner agent-whatsapp-odonto"]
+            ep["entrypoint.sh<br/>(supervisiona os 2 processos)"]
+            java["Java 21 · app.jar<br/>porta 8080 · usuário odonto"]
+            pg["PostgreSQL 18<br/>só 127.0.0.1:5432 · usuário postgres"]
+            ep --> pg
+            ep --> java
+            java --> pg
+        end
+        vol[("Volume Docker<br/>agent-whatsapp-odonto-dados<br/>/var/lib/postgresql")]
+        env[/".env (segredos, chmod 600)"/]
+        bkp[/"./backups (pg_dump -Fc)"/]
+        sh["odonto.sh"]
+    end
+
+    internet -->|"443: /webhook/whatsapp"| proxy --> java
+    pg --- vol
+    env -.-> cont
+    sh -->|"docker compose"| cont
+    sh -->|backup / restaurar| bkp

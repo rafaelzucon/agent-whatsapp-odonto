@@ -1,0 +1,42 @@
+flowchart LR
+    subgraph entrada["Adaptadores de entrada"]
+        wh["WebhookController<br/>+ AssinaturaWebhookVerifier<br/>+ ConversorWebhook"]
+        ouv["OuvinteEventos<br/>(@Async, trava por conversa)"]
+        tar["TarefasAgendadas<br/>(expiração e expurgo)"]
+        api["AgendaController · PacienteController<br/>CatalogoController (AdminTokenFilter)"]
+    end
+
+    subgraph app["Aplicação"]
+        rec["ReceberMensagensUseCase"]
+        cond["ConduzirConversaUseCase<br/>ProcessadorComandosConversa<br/>RespondedorPaciente"]
+        ident["IdentificarPaciente · CadastrarPaciente"]
+        queixa["RegistrarQueixaUseCase"]
+        agendar["AgendarConsultaUseCase"]
+        notif["NotificarConsultorioUseCase"]
+        transc["TranscreverAudioUseCase"]
+        adm["GerenciarAgenda · ConsultarPacientes<br/>ReclassificarQueixa · ConsultarCatalogo"]
+        manut["ExpirarConversas · ExpurgarMensagens"]
+    end
+
+    subgraph saida["Adaptadores de saída"]
+        jpa["*JpaAdapter<br/>(PostgreSQL, AES-GCM, HMAC)"]
+        wa["WhatsAppCloudApiAdapter"]
+        ia["ClassificadorProblemaClaudeAdapter<br/>InterpretadorDataHoraClaudeAdapter"]
+        wsp["WhisperTranscritorAdapter"]
+        canais["Canais: WhatsApp · E-mail · Log"]
+        pub["SpringPublicadorEventos"]
+    end
+
+    wh --> rec --> pub -.MensagemRecebidaEvento.-> ouv
+    ouv --> cond
+    cond --> ident & queixa & agendar & transc & notif
+    agendar -.ConsultaAgendadaEvento.-> ouv
+    ouv --> notif
+    tar --> manut
+    api --> adm
+    queixa --> ia
+    cond --> ia
+    transc --> wa & wsp
+    cond --> wa
+    notif --> canais
+    ident & queixa & agendar & adm & manut & rec & cond --> jpa

@@ -1,0 +1,27 @@
+flowchart LR
+    paciente(["👤 Paciente<br/>(WhatsApp)"])
+    equipe(["🦷 Equipe do consultório<br/>(WhatsApp, e-mail, API admin)"])
+
+    subgraph meta["Meta"]
+        cloud["WhatsApp Business Platform<br/>Cloud API (Graph API v24.0)"]
+    end
+
+    subgraph servidor["Servidor do consultório (Docker)"]
+        agente["Agente WhatsApp Odonto<br/>Java 21 · Spring Boot 4 · Spring AI 2"]
+        banco[("PostgreSQL 18<br/>pacientes, prontuários,<br/>agenda, conversas")]
+    end
+
+    claude["Anthropic Claude<br/>(classificar queixa e<br/>interpretar data/hora)"]
+    whisper["OpenAI Whisper<br/>(opcional: transcrever áudio)"]
+    smtp["Servidor SMTP<br/>(opcional)"]
+
+    paciente <-->|mensagens| cloud
+    cloud -->|webhook assinado<br/>HMAC-SHA256| agente
+    agente -->|respostas e avisos| cloud
+    cloud -->|aviso de agendamento| equipe
+    agente <--> banco
+    agente -->|texto da queixa / data| claude
+    agente -->|áudio| whisper
+    agente -->|aviso por e-mail| smtp
+    smtp --> equipe
+    equipe -->|Bearer ADMIN_TOKEN| agente

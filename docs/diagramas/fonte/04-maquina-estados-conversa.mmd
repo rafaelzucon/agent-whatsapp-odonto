@@ -1,0 +1,38 @@
+stateDiagram-v2
+    [*] --> AGUARDANDO_RG: primeira mensagem<br/>(BOAS_VINDAS)
+
+    AGUARDANDO_RG --> AGUARDANDO_NOME: RG não cadastrado
+    AGUARDANDO_RG --> AGUARDANDO_PROBLEMA: paciente encontrado
+    AGUARDANDO_RG --> AGUARDANDO_CONFIRMACAO_NOVA_CONSULTA: já tem consulta futura
+
+    AGUARDANDO_NOME --> AGUARDANDO_DATA_NASCIMENTO
+    AGUARDANDO_DATA_NASCIMENTO --> AGUARDANDO_RESPONSAVEL: menor de 18 anos
+    AGUARDANDO_DATA_NASCIMENTO --> AGUARDANDO_CONSENTIMENTO: maior de idade
+    AGUARDANDO_RESPONSAVEL --> AGUARDANDO_CONSENTIMENTO
+    AGUARDANDO_CONSENTIMENTO --> AGUARDANDO_PROBLEMA: SIM → cadastro + prontuário
+    AGUARDANDO_CONSENTIMENTO --> ENCERRADA_SEM_CONSENTIMENTO: NÃO → dados descartados,<br/>equipe avisada
+
+    AGUARDANDO_CONFIRMACAO_NOVA_CONSULTA --> AGUARDANDO_PROBLEMA: SIM
+    AGUARDANDO_CONFIRMACAO_NOVA_CONSULTA --> CONCLUIDA: NÃO (ENCERRAMENTO)
+
+    AGUARDANDO_PROBLEMA --> AGUARDANDO_DATA_HORA: queixa classificada<br/>e registrada no prontuário
+    AGUARDANDO_PROBLEMA --> AGUARDANDO_CONFIRMACAO_SUGESTAO: EMERGÊNCIA → equipe avisada,<br/>oferece 1º horário livre
+
+    AGUARDANDO_DATA_HORA --> CONCLUIDA: horário livre → AGENDADO
+    AGUARDANDO_DATA_HORA --> AGUARDANDO_CONFIRMACAO_SUGESTAO: ocupado ou impreciso →<br/>sugere o mais próximo
+    AGUARDANDO_DATA_HORA --> ENCAMINHADA_ATENDIMENTO_HUMANO: sem horário livre
+
+    AGUARDANDO_CONFIRMACAO_SUGESTAO --> CONCLUIDA: SIM → AGENDADO
+    AGUARDANDO_CONFIRMACAO_SUGESTAO --> AGUARDANDO_DATA_HORA: NÃO
+    AGUARDANDO_CONFIRMACAO_SUGESTAO --> AGUARDANDO_CONFIRMACAO_SUGESTAO: outro dia/horário
+
+    CONCLUIDA --> AGUARDANDO_RG: nova mensagem reinicia
+    ENCERRADA_SEM_CONSENTIMENTO --> AGUARDANDO_RG: após expirar
+    ENCAMINHADA_ATENDIMENTO_HUMANO --> AGUARDANDO_RG: após expirar
+
+    note right of ENCAMINHADA_ATENDIMENTO_HUMANO
+        Também alcançado de qualquer etapa
+        após N respostas inválidas seguidas
+        (NAO_ENTENDI + dica da etapa).
+        O agente fica em silêncio até expirar.
+    end note

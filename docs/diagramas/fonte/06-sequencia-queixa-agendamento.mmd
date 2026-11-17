@@ -1,0 +1,35 @@
+sequenceDiagram
+    autonumber
+    actor P as Paciente
+    participant A as Agente
+    participant C as Claude (Spring AI)
+    participant AG as Agenda (domínio)
+    participant DB as PostgreSQL
+    actor E as Consultório
+
+    P->>A: "Dor forte no dente ao tomar gelado"
+    A->>A: DetectorSinaisAlarme (palavras de emergência)
+    A->>C: classificar no catálogo (JSON estruturado)
+    alt IA indisponível ou confiança baixa
+        A->>A: ClassificadorPorPalavraChave
+    end
+    A->>DB: QueixaRelatada no prontuário
+    A-->>P: PEDIR_DATA_HORA
+    P->>A: "sexta às 10h"
+    A->>A: InterpretadorDataHoraDeterministico
+    opt texto não reconhecido
+        A->>C: interpretar data/hora (JSON estruturado)
+    end
+    A->>AG: resolver(preferência)
+    alt horário livre
+        A->>DB: grava Consulta (índice único evita dupla reserva)
+        A-->>P: AGENDADO (data, hora, endereço)
+        A-)E: aviso: paciente, data/hora, problema, prontuário
+    else ocupado ou indisponível
+        AG-->>A: horário livre mais próximo
+        A-->>P: SUGERIR_HORARIO ("Posso agendar?")
+        P->>A: "sim"
+        A->>DB: grava Consulta
+        A-->>P: AGENDADO
+        A-)E: aviso de agendamento
+    end

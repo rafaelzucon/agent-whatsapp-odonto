@@ -1,0 +1,29 @@
+sequenceDiagram
+    autonumber
+    participant M as Meta (Cloud API)
+    participant WC as WebhookController
+    participant V as AssinaturaWebhookVerifier
+    participant R as ReceberMensagensService
+    participant DB as PostgreSQL
+    participant O as OuvinteEventos (@Async)
+    participant CC as ConduzirConversaService
+
+    M->>WC: POST /webhook/whatsapp (corpo + X-Hub-Signature-256)
+    WC->>V: HMAC-SHA256 com App Secret (tempo constante)
+    alt assinatura inválida
+        WC-->>M: 401
+    else válida
+        WC->>R: comandos convertidos (texto, áudio, botão)
+        R->>DB: grava Mensagem (wa_message_id único → ignora duplicadas)
+        R-)O: MensagemRecebidaEvento (após o commit)
+        WC-->>M: 200 OK (rápido, sem esperar a IA)
+        O->>O: trava da conversa (uma mensagem por vez por número)
+        O->>CC: conduzir(mensagemId)
+        CC->>DB: carrega Conversa (dados cifrados)
+        CC->>CC: Conversa.registrarResposta → AcaoConversa
+        loop enquanto houver comando
+            CC->>CC: ProcessadorComandosConversa executa e devolve resultado à Conversa
+        end
+        CC->>DB: salva Conversa
+        CC->>M: envia respostas (Graph API /messages)
+    end

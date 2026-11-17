@@ -1,0 +1,118 @@
+classDiagram
+    direction LR
+    class Paciente {
+        -Long id
+        -DocumentoRg rg
+        -String nomeCompleto
+        -LocalDate dataNascimento
+        -Optional~String~ responsavelLegal
+        -Set~WaId~ telefones
+        -boolean consentimentoLgpd
+        +cadastrar(...)$ Paciente
+        +vincularTelefone(WaId)
+        +idade(LocalDate) int
+    }
+    class Prontuario {
+        -String numero
+        -List~QueixaRelatada~ queixas
+        +abrir(pacienteId, seq, agora)$ Prontuario
+        +registrarQueixa(texto, ClassificacaoQueixa, agora)
+        +reclassificarQueixa(id, ProblemaOdontologico)
+        +vincularConsulta(queixaId, consultaId)
+    }
+    class QueixaRelatada {
+        -String textoOriginal
+        -ProblemaOdontologico problema
+        -double confianca
+        -OrigemClassificacao origem
+        -Optional~Long~ consultaId
+    }
+    class ProblemaOdontologico {
+        <<record>>
+        String codigo
+        String nome
+        String especialidade
+        Prioridade prioridade
+        Optional~String~ cid10
+        List~String~ palavrasChave
+    }
+    class Consulta {
+        -Horario horario
+        -StatusConsulta status
+        +agendar(...)$ Consulta
+        +cancelar()
+        +marcarRealizada(agora)
+        +marcarFalta(agora)
+    }
+    class Conversa {
+        -WaId waId
+        -EtapaConversa etapa
+        -DadosConversa dados
+        -int tentativasInvalidas
+        +registrarResposta(texto, agora, hoje, regras) AcaoConversa
+        +pacienteEncontrado(...) AcaoConversa
+        +queixaRegistrada(...) AcaoConversa
+        +disponibilidadeVerificada(...) AcaoConversa
+        +consultaAgendada(Horario) AcaoConversa
+    }
+    class AcaoConversa {
+        <<record>>
+        List~RespostaAgente~ respostas
+        Optional~AlertaConversa~ alerta
+        Optional~ComandoConversa~ comando
+    }
+    class Agenda {
+        <<service>>
+        +resolver(PreferenciaHorario, agora) Disponibilidade
+        +primeiroLivre(agora) Disponibilidade
+        +horariosLivres(de, ate, agora)
+    }
+    class DocumentoRg {
+        <<value object>>
+        String numero
+        Uf uf
+    }
+    class WaId {
+        <<value object>>
+        String valor
+    }
+    class Horario {
+        <<value object>>
+        LocalDateTime inicio
+        LocalDateTime fim
+    }
+    class Prioridade {
+        <<enumeration>>
+        EMERGENCIA
+        URGENCIA
+        ROTINA
+    }
+    class EtapaConversa {
+        <<enumeration>>
+        AGUARDANDO_RG
+        AGUARDANDO_PROBLEMA
+        AGUARDANDO_DATA_HORA
+        CONCLUIDA
+    }
+    class StatusConsulta {
+        <<enumeration>>
+        AGENDADA
+        CANCELADA
+        REALIZADA
+        FALTOU
+    }
+
+    Paciente "1" -- "1" Prontuario
+    Prontuario "1" *-- "*" QueixaRelatada
+    QueixaRelatada --> ProblemaOdontologico
+    Consulta --> Paciente
+    Consulta --> QueixaRelatada
+    Consulta *-- Horario
+    Consulta --> StatusConsulta
+    Paciente *-- DocumentoRg
+    Paciente *-- WaId
+    Conversa *-- WaId
+    Conversa --> EtapaConversa
+    Conversa ..> AcaoConversa : devolve
+    ProblemaOdontologico --> Prioridade
+    Agenda ..> Horario

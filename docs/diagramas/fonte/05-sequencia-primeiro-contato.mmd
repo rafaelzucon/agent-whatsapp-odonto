@@ -1,0 +1,25 @@
+sequenceDiagram
+    autonumber
+    actor P as Paciente
+    participant W as WhatsApp Cloud API
+    participant A as Agente (Conversa)
+    participant DB as PostgreSQL
+
+    P->>W: "Oi"
+    W->>A: webhook (mensagem)
+    A-->>P: BOAS_VINDAS: informe RG e UF
+    P->>A: "12.345.678-9 SP"
+    A->>DB: busca paciente pelo HMAC do RG
+    DB-->>A: não encontrado
+    A-->>P: PEDIR_NOME
+    P->>A: "Maria Aparecida da Silva"
+    A-->>P: PEDIR_DATA_NASCIMENTO
+    P->>A: "25/03/1990"
+    alt menor de 18 anos
+        A-->>P: PEDIR_RESPONSAVEL
+        P->>A: nome do responsável
+    end
+    A-->>P: PEDIR_CONSENTIMENTO (LGPD)
+    P->>A: "sim"
+    A->>DB: grava Paciente (dados cifrados) + Prontuário PR-000123
+    A-->>P: CADASTRO_CONCLUIDO + pede a queixa
