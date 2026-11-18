@@ -87,6 +87,20 @@ class ArquiteturaTest {
             .because("controladores só traduzem HTTP para chamadas de casos de uso pelas portas de entrada");
 
     @ArchTest
+    static final ArchRule aws_fica_na_infraestrutura_do_lambda = noClasses()
+            .that().resideOutsideOfPackage(BASE + ".infraestrutura.lambda..")
+            .should().dependOnClassesThat().resideInAnyPackage("com.amazonaws..", "software.amazon..", "org.crac..")
+            .because("o AWS Lambda é só uma forma de implantação: os adaptadores do modo serverless "
+                    + "(adaptador.entrada.lambda) não conhecem a AWS e o resto do sistema nem sabe que ela existe");
+
+    @ArchTest
+    static final ArchRule adaptador_lambda_usa_apenas_portas_de_entrada = noClasses()
+            .that().resideInAPackage(BASE + ".adaptador.entrada.lambda..")
+            .should().dependOnClassesThat().resideInAnyPackage(BASE + ".aplicacao.porta.saida..",
+                    BASE + ".aplicacao.casodeuso..", BASE + ".adaptador.saida..")
+            .because("assim como os controladores, o adaptador serverless só traduz eventos em casos de uso");
+
+    @ArchTest
     static final ArchRule sem_injecao_por_campo = NO_CLASSES_SHOULD_USE_FIELD_INJECTION
             .because("dependências entram pelo construtor, o que deixa as classes testáveis e imutáveis");
 }

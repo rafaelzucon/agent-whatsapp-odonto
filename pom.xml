@@ -22,6 +22,11 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <spring-ai.version>2.0.2</spring-ai.version>
         <archunit.version>1.5.1</archunit.version>
+        <aws-sdk.version>2.59.3</aws-sdk.version>
+        <aws-lambda-core.version>1.4.1</aws-lambda-core.version>
+        <aws-lambda-events.version>3.16.1</aws-lambda-events.version>
+        <aws-serverless-container.version>3.0.5</aws-serverless-container.version>
+        <crac.version>1.5.0</crac.version>
     </properties>
 
     <dependencyManagement>
@@ -30,6 +35,13 @@
                 <groupId>org.springframework.ai</groupId>
                 <artifactId>spring-ai-bom</artifactId>
                 <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>bom</artifactId>
+                <version>${aws-sdk.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -83,6 +95,76 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Modo AWS Lambda (perfil Spring "lambda"); inertes no modo servidor -->
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-lambda-java-core</artifactId>
+            <version>${aws-lambda-core.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-lambda-java-events</artifactId>
+            <version>${aws-lambda-events.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.amazonaws.serverless</groupId>
+            <artifactId>aws-serverless-java-container-springboot4</artifactId>
+            <version>${aws-serverless-container.version}</version>
+            <exclusions>
+                <!-- Registrado automaticamente no JsonMapper do Spring, quebra a serialização de records -->
+                <exclusion>
+                    <groupId>tools.jackson.module</groupId>
+                    <artifactId>jackson-module-afterburner</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>sqs</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>netty-nio-client</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>apache-client</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>apache5-client</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>secretsmanager</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>netty-nio-client</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>apache-client</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>apache5-client</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>url-connection-client</artifactId>
+        </dependency>
+        <!-- Ganchos de checkpoint/restore usados pelo SnapStart (Hikari e ciclo de vida do Spring) -->
+        <dependency>
+            <groupId>org.crac</groupId>
+            <artifactId>crac</artifactId>
+            <version>${crac.version}</version>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -104,4 +186,59 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- Pacote para o AWS Lambda: ./mvnw -Plambda package -> target/agent-whatsapp-odonto-lambda.zip -->
+        <profile>
+            <id>lambda</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>dependencias-lambda</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>copy-dependencies</goal>
+                                </goals>
+                                <configuration>
+                                    <outputDirectory>${project.build.directory}/lambda-lib</outputDirectory>
+                                    <includeScope>runtime</includeScope>
+                                    <!-- Sem bibliotecas nativas de macOS/Windows e sem o WebSocket do Tomcat: o pacote
+                                         fica abaixo dos 250 MB descompactados permitidos pelo Lambda. O tomcat-embed-core
+                                         fica porque fornece a API Servlet usada pela função admin (que roda no
+                                         aws-serverless-java-container, sem abrir porta), e o tomcat-embed-el porque
+                                         o Hibernate Validator precisa do jakarta.el. -->
+                                    <excludeClassifiers>osx-x86_64,osx-aarch_64,windows-x86_64</excludeClassifiers>
+                                    <excludeArtifactIds>tomcat-embed-websocket,netty-resolver-dns-native-macos,netty-resolver-dns-classes-macos</excludeArtifactIds>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-assembly-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>zip-lambda</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>single</goal>
+                                </goals>
+                                <configuration>
+                                    <descriptors>
+                                        <descriptor>src/assembly/lambda.xml</descriptor>
+                                    </descriptors>
+                                    <finalName>${project.artifactId}-lambda</finalName>
+                                    <appendAssemblyId>false</appendAssemblyId>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

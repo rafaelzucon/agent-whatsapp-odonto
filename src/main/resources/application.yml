@@ -1,5 +1,7 @@
 # Configuração do Agente WhatsApp Odonto.
-# Valores sensíveis vêm SEMPRE de variáveis de ambiente (veja .env.example); nunca coloque segredos aqui.
+# Valores sensíveis vêm SEMPRE de fora do arquivo; nunca coloque segredos aqui. No modo servidor (Docker), de
+# variáveis de ambiente (veja .env.example); no modo AWS Lambda, do AWS Secrets Manager, com as mesmas chaves
+# (veja aws/ e o perfil "lambda" no fim deste arquivo).
 
 spring:
   application:
@@ -9,6 +11,10 @@ spring:
       enabled: true
   main:
     keep-alive: true
+  autoconfigure:
+    # Vem com o aws-serverless-java-container e trocaria o Tomcat por um servidor "de mentira"; só o
+    # AdminHandler do Lambda precisa dele, e o registra explicitamente.
+    exclude: org.springframework.cloud.function.serverless.web.ServerlessAutoConfiguration
 
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/odonto}
@@ -105,6 +111,8 @@ logging:
     br.com.consultorio.odonto: ${LOG_NIVEL:INFO}
 
 odonto:
+  # servidor (padrão: Tomcat + tarefas @Scheduled) ou lambda (definido pelo perfil "lambda").
+  execucao: servidor
   nome-consultorio: ${CONSULTORIO_NOME:Consultório Odontológico}
   endereco: ${CONSULTORIO_ENDERECO:Rua Exemplo, 123 - Centro}
   fuso-horario: ${CONSULTORIO_FUSO:America/Sao_Paulo}
@@ -229,3 +237,37 @@ odonto:
       aguardando-problema: "Conte em uma frase o que está sentindo, por exemplo: dor no dente do fundo ao mastigar."
       aguardando-data-hora: "Diga o dia e o horário desejados, por exemplo: amanhã às 9h ou 20/11 às 14h."
       aguardando-confirmacao-sugestao: "Responda SIM para confirmar o horário sugerido ou diga outro dia e horário."
+
+---
+# Perfil "lambda": ativado pelos handlers de br.com.consultorio.odonto.infraestrutura.lambda (AWS Lambda com
+# SnapStart). Nada aqui pode abrir conexão com o banco na inicialização, que é capturada no snapshot.
+spring:
+  config:
+    activate:
+      on-profile: lambda
+  main:
+    keep-alive: false
+    banner-mode: "off"
+  # As migrações rodam como passo da implantação (MigracaoHandler), não na partida de cada função.
+  flyway:
+    enabled: false
+  datasource:
+    hikari:
+      # Poucas conexões por instância; a concorrência é limitada no template (MaximumConcurrency da fila).
+      maximum-pool-size: ${DB_POOL_MAXIMO:2}
+      minimum-idle: 0
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        boot:
+          allow_jdbc_metadata_access: false
+      # Sem consultar o banco, o Hibernate precisa saber a versão do PostgreSQL (o RDS do template usa a 18).
+      jakarta:
+        persistence:
+          database-product-name: PostgreSQL
+          database-product-version: "18.0"
+
+odonto:
+  execucao: lambda
