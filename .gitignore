@@ -20,3 +20,9 @@ Thumbs.db
 *.env.local
 backups/
 logs/
+
+# AWS Lambda (configuração local da implantação e artefatos do SAM)
+aws/parametros.env
+aws/segredos.json
+.aws-sam/
+samconfig.toml
