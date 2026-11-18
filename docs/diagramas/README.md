@@ -18,6 +18,7 @@ npx -p @mermaid-js/mermaid-cli mmdc -i docs/diagramas/fonte/04-maquina-estados-c
 8. [Classes do domínio](#8-classes-do-domínio)
 9. [Modelo de dados (PostgreSQL)](#9-modelo-de-dados-postgresql)
 10. [Implantação](#10-implantação)
+11. [Implantação na AWS Lambda](#11-implantação-na-aws-lambda)
 
 ## 1. Contexto do sistema
 
@@ -563,4 +564,55 @@ flowchart TB
     env -.-> cont
     sh -->|"docker compose"| cont
     sh -->|backup / restaurar| bkp
+```
+
+## 11. Implantação na AWS Lambda
+
+Modo alternativo ao Docker: o webhook responde rápido e só enfileira; a conversa é processada por outra função, consumindo uma fila SQS FIFO agrupada pelo número do paciente (ordem garantida por conversa). Banco no RDS em sub-redes privadas; saída para a Meta e as IAs pelo NAT Gateway. Detalhes no [README](../../README.md#implantação-na-aws-lambda).
+
+Fonte: [`fonte/11-implantacao-aws-lambda.mmd`](fonte/11-implantacao-aws-lambda.mmd)
+
+```mermaid
+flowchart LR
+    paciente(["👤 Paciente"])
+    meta["Meta<br/>WhatsApp Cloud API"]
+    equipe(["🦷 Equipe<br/>(API admin)"])
+    ia["Anthropic Claude<br/>OpenAI Whisper"]
+
+    subgraph aws["AWS (pilha SAM: aws/template.yaml)"]
+        direction LR
+        webhook["λ webhook<br/>Function URL pública<br/>valida HMAC, enfileira"]
+        fila[["SQS FIFO mensagens<br/>grupo = número do paciente<br/>dedupe = id da mensagem"]]
+        dlq[["SQS FIFO falhas<br/>(DLQ, 5 tentativas)"]]
+        segredo[/"Secrets Manager<br/>tokens, chaves, DB_SENHA"/]
+        agenda["EventBridge Scheduler<br/>5 min: expirar conversas<br/>03:30: expurgar mensagens"]
+
+        subgraph vpc["VPC 10.20.0.0/16"]
+            subgraph privada["Sub-redes privadas (2 AZs)"]
+                conversa["λ conversa<br/>máquina de estados"]
+                manutencao["λ manutencao"]
+                admin["λ admin<br/>Function URL (opcional)"]
+                migracao["λ migracao<br/>Flyway (custom resource)"]
+                rds[("RDS PostgreSQL 18<br/>cifrado, backup 7 dias")]
+            end
+            nat["NAT Gateway<br/>(sub-rede pública)"]
+        end
+    end
+
+    paciente <--> meta
+    meta -->|"POST assinado"| webhook
+    webhook --> fila
+    fila -->|"lotes de até 10"| conversa
+    fila -.->|"após 5 falhas"| dlq
+    agenda --> manutencao
+    conversa --> rds
+    manutencao --> rds
+    admin --> rds
+    migracao -->|"no deploy"| rds
+    equipe -->|"Bearer ADMIN_TOKEN"| admin
+    conversa --> nat
+    nat -->|"respostas e avisos"| meta
+    nat --> ia
+    segredo -.->|"lido na inicialização<br/>(fica no snapshot SnapStart)"| conversa
+    segredo -.-> webhook
 ```

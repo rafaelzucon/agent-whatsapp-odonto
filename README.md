@@ -20,6 +20,7 @@ O fluxo é um **workflow agêntico com etapas fixas** (máquina de estados da co
 - [Pré-requisitos](#pré-requisitos)
 - [Configurando o WhatsApp na Meta](#configurando-o-whatsapp-na-meta)
 - [Instalação e operação](#instalação-e-operação)
+- [Implantação na AWS Lambda](#implantação-na-aws-lambda)
 - [Variáveis de ambiente](#variáveis-de-ambiente)
 - [Personalizando os textos](#personalizando-os-textos)
 - [API administrativa](#api-administrativa)
@@ -93,7 +94,8 @@ Fluxo de uma mensagem: a Meta chama `POST /webhook/whatsapp` → valida a assina
 | Banco | PostgreSQL 18 + Flyway + Spring Data JPA (`ddl-auto: validate`) |
 | WhatsApp | WhatsApp Business Platform – Cloud API (Graph API `v24.0`, configurável) |
 | Testes | JUnit 5, AssertJ, Mockito, ArchUnit 1.5.1 |
-| Empacotamento | Docker (um contêiner com a aplicação e o PostgreSQL), Maven Wrapper |
+| Empacotamento | Docker (um contêiner com a aplicação e o PostgreSQL) ou AWS Lambda (zip, SAM, SnapStart), Maven Wrapper |
+| AWS (modo Lambda) | AWS SDK for Java 2.x, `aws-lambda-java-events`, `aws-serverless-java-container-springboot4` (só para a API admin) |
 
 ## Pré-requisitos
 
@@ -165,6 +167,67 @@ agente.seuconsultorio.com.br {
 ```
 
 Com Nginx, use `proxy_pass http://127.0.0.1:8080;` num `server` com TLS (Certbot). Outra opção sem abrir portas é o Cloudflare Tunnel. Para expor só o webhook, publique apenas `/webhook/whatsapp`; a API administrativa pode ficar restrita à rede interna.
+
+## Implantação na AWS Lambda
+
+Alternativa ao servidor com Docker: o mesmo código roda em funções AWS Lambda, sem servidor para manter. A pilha é descrita em [`aws/template.yaml`](aws/template.yaml) (AWS SAM) e implantada com [`aws/implantar.sh`](aws/implantar.sh). Diagrama: [11. Implantação na AWS Lambda](docs/diagramas/README.md#11-implantação-na-aws-lambda).
+
+### Como funciona
+
+| Função | Gatilho | O que faz |
+|---|---|---|
+| `webhook` | Function URL pública (HTTPS) | Responde ao desafio da Meta, valida a assinatura HMAC e enfileira as mensagens. Fica fora da VPC e não acessa o banco, para responder em milissegundos. |
+| `conversa` | Fila SQS FIFO (lotes de até 10) | Executa a máquina de estados, grava no banco e responde pelo WhatsApp. |
+| `manutencao` | EventBridge Scheduler | A cada 5 minutos expira conversas paradas; às 03:30 (Brasília) expurga mensagens antigas. |
+| `admin` | Function URL (opcional, `HabilitarApiAdmin`) | A mesma [API administrativa](#api-administrativa), protegida pelo `ADMIN_TOKEN`. |
+| `migracao` | Recurso personalizado do CloudFormation | Aplica as migrações do Flyway a cada implantação, antes de as outras funções mudarem de versão. |
+
+- **Ordem e concorrência:** a fila FIFO usa o número do paciente como grupo, então as mensagens de uma conversa são processadas uma de cada vez e em ordem, mesmo com várias funções em paralelo. Isso substitui as travas em memória do modo servidor. A deduplicação usa o id da mensagem da Meta, e falhas parciais do lote são devolvidas à fila (`ReportBatchItemFailures`). Depois de 5 tentativas, a mensagem vai para a fila de falhas (DLQ).
+- **Tarefas assíncronas:** avisos ao consultório e alertas, que no servidor rodam em segundo plano, são aguardados antes de a função terminar, para o Lambda não congelá-los no meio.
+- **Segredos:** ficam em **um** segredo JSON do Secrets Manager, com as mesmas chaves das variáveis de ambiente (`WHATSAPP_TOKEN_ACESSO`, `ANTHROPIC_API_KEY`, `CRIPTO_CHAVE_DADOS`, `DB_SENHA`...). Os demais parâmetros vão como variáveis de ambiente das funções, geradas pelo template.
+- **Inicialização rápida:** SnapStart (Java 21, arm64) guarda um snapshot com o Spring já iniciado; sem ele, a primeira mensagem depois de um tempo parado levaria cerca de 5 a 10 segundos.
+- **Rede:** VPC própria com RDS PostgreSQL 18 em sub-redes privadas (cifrado, backup de 7 dias, proteção contra exclusão) e um NAT Gateway para as funções chamarem a Meta, a Anthropic e a OpenAI.
+- **Mesmo código, outro empacotamento:** os handlers ficam em `infraestrutura/lambda` e os adaptadores sem dependência da AWS em `adaptador/entrada/lambda`; domínio e aplicação não mudam (o `ArquiteturaTest` verifica). Nas funções, o Spring sobe sem servidor web (só a `admin` usa o contêiner de servlet), sem o agendador interno (substituído pelo EventBridge) e sem o Flyway na inicialização (perfil `lambda`).
+
+### Passo a passo
+
+Pré-requisitos: conta AWS com credenciais configuradas (`aws configure` ou `aws sso login`), [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html), Java 21, Python 3 e openssl.
+
+```bash
+./aws/implantar.sh configurar   # cria aws/parametros.env e aws/segredos.json (chaves, senha e tokens gerados)
+# edite os campos PREENCHA: Phone Number ID, número do consultório, token da Meta, App Secret, chave da Anthropic...
+./aws/implantar.sh verificar    # confere configuração, credenciais e template
+./aws/implantar.sh implantar    # gera o zip, publica o segredo e implanta a pilha (~15 min na primeira vez, por causa do RDS)
+```
+
+No fim, o script mostra a `UrlWebhook`. Cadastre-a no painel da Meta (veja [Configurando o WhatsApp na Meta](#configurando-o-whatsapp-na-meta)) com o `WHATSAPP_TOKEN_VERIFICACAO` de `aws/segredos.json` e assine o campo `messages`. Os arquivos `aws/parametros.env` e `aws/segredos.json` ficam fora do Git; guarde uma cópia segura das chaves `CRIPTO_*`, pois sem elas os dados cifrados não podem ser lidos.
+
+| Comando | Para quê |
+|---|---|
+| `./aws/implantar.sh implantar --construir` | Reconstrói o pacote (com testes) e implanta. Use depois de mudar código, parâmetros ou segredos. |
+| `./aws/implantar.sh saidas` | URLs do webhook e da API admin, filas e endereço do banco. |
+| `./aws/implantar.sh logs conversa 30m` | Acompanha os logs de uma função (`webhook`, `conversa`, `manutencao`, `admin`, `migracao`). |
+| `./aws/implantar.sh falhas` | Quantas mensagens estão na fila de falhas. |
+| `./aws/implantar.sh migrar` | Roda as migrações manualmente. |
+| `./aws/implantar.sh remover` | Remove a pilha. O RDS deixa um snapshot final e o segredo é mantido. |
+
+O pacote também pode ser gerado à parte com `./mvnw -Plambda package`, que produz `target/agent-whatsapp-odonto-lambda.zip` (cerca de 180 MB; o limite do Lambda é 250 MB descompactado, conferido no CI).
+
+### Custos estimados
+
+Para o volume de um consultório (centenas de mensagens por dia), Lambda, SQS e EventBridge ficam praticamente dentro do nível gratuito. O custo fixo vem do **NAT Gateway** (cerca de US$ 45/mês em São Paulo), do **RDS `db.t4g.micro`** com 20 GB (cerca de US$ 25/mês), do Secrets Manager (US$ 0,40/mês) e dos logs. O total fica na faixa de **US$ 70 a 80 por mês**, mais as APIs da Anthropic e da OpenAI. São valores aproximados: confira na [calculadora da AWS](https://calculator.aws/) para a sua região. Para reduzir custos, dá para trocar o NAT Gateway por uma instância NAT (ex.: fck-nat) ou usar a região `us-east-1`.
+
+### Limitações do modo Lambda
+
+- **Segredos congelados no snapshot:** o SnapStart guarda os segredos lidos na inicialização. Depois de trocar um segredo, rode `./aws/implantar.sh implantar`; o script detecta a mudança e publica novas versões. Se `DB_SENHA` mudar, ele também troca a senha mestre do RDS.
+- **Mensagem perdida em timeout:** se a função `conversa` estourar o tempo (60 s) depois de registrar a mensagem como recebida, a nova tentativa a trata como duplicada. É o mesmo comportamento de uma queda do servidor no modo Docker.
+- **Fila de falhas:** mensagens que falharam 5 vezes ficam 14 dias na DLQ. Vale criar um alarme do CloudWatch para `ApproximateNumberOfMessagesVisible` maior que zero.
+- **Remoção:** o `remover` desliga a proteção contra exclusão do RDS antes de apagar a pilha; um snapshot final é mantido (e cobrado) até você apagá-lo.
+- **SnapStart por região:** confira se o SnapStart para Java está disponível na região escolhida. Se não estiver, remova `SnapStart` do bloco `Globals` do template; tudo funciona, só com inicialização mais lenta.
+
+### Teste local
+
+As cinco funções foram testadas com a imagem oficial `public.ecr.aws/lambda/java:21` (Runtime Interface Emulator), PostgreSQL 18 e LocalStack (SQS FIFO e Secrets Manager), percorrendo cadastro, queixa, conflito de horário com sugestão, confirmação e aviso ao consultório. O CI repete um teste de fumaça do webhook no mesmo emulador.
 
 ## Variáveis de ambiente
 
@@ -242,7 +305,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/
 
 Para rodar localmente sem Docker, suba um PostgreSQL 18 e informe `DB_URL=jdbc:postgresql://localhost:5432/odonto`, `DB_USUARIO` e `DB_SENHA`, além das demais variáveis, e rode `./mvnw spring-boot:run`. Para receber webhooks na sua máquina, use um túnel HTTPS (Cloudflare Tunnel, ngrok).
 
-O CI do GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) roda `./mvnw verify`, constrói a imagem Docker e faz um teste de fumaça no `/actuator/health`.
+O CI do GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) roda `./mvnw verify`, constrói a imagem Docker e faz um teste de fumaça no `/actuator/health`. Também gera o zip do Lambda, confere o limite de 250 MB, valida o template SAM (`cfn-lint`) e o `implantar.sh` (`shellcheck`) e chama o webhook no emulador oficial do Lambda.
 
 ## Segurança e LGPD
 
@@ -279,7 +342,7 @@ As classificações servem para triagem e organização da agenda, e o dentista 
 
 ## Limitações conhecidas
 
-- **Uma instância só:** as travas por conversa ficam em memória. Para rodar mais de uma réplica seria preciso uma trava distribuída (ex.: `pg_advisory_lock`). A reserva do horário já é protegida no banco (índice único parcial em `consulta.inicio` para consultas AGENDADAS).
+- **Uma instância só (modo Docker):** as travas por conversa ficam em memória. Para rodar mais de uma réplica seria preciso uma trava distribuída (ex.: `pg_advisory_lock`). No [modo Lambda](#implantação-na-aws-lambda) isso não se aplica: a fila FIFO serializa cada conversa. A reserva do horário já é protegida no banco (índice único parcial em `consulta.inicio` para consultas AGENDADAS).
 - **Busca por nome em memória:** como o nome é cifrado, a busca administrativa decifra e filtra na aplicação. Funciona bem para o volume de um consultório, mas não para dezenas de milhares de pacientes.
 - **Validação do RG:** o formato do RG varia por UF e não tem dígito verificador nacional. Por isso só são validados o tamanho (5 a 14 caracteres), os caracteres permitidos e a UF.
 - **Webhook com JSON inválido** recebe 200 (e é registrado no log), para a Meta não ficar reenviando.
