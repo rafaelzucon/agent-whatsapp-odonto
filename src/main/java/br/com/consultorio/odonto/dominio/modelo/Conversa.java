@@ -3,12 +3,10 @@ package br.com.consultorio.odonto.dominio.modelo;
 import br.com.consultorio.odonto.dominio.excecao.DadoInvalidoException;
 import br.com.consultorio.odonto.dominio.excecao.TransicaoInvalidaException;
 import br.com.consultorio.odonto.dominio.modelo.ComandoConversa.BuscarPrimeiroHorarioLivre;
-import br.com.consultorio.odonto.dominio.modelo.ComandoConversa.CadastrarPaciente;
 import br.com.consultorio.odonto.dominio.modelo.ComandoConversa.IdentificarPaciente;
 import br.com.consultorio.odonto.dominio.modelo.ComandoConversa.InterpretarDataHora;
 import br.com.consultorio.odonto.dominio.modelo.ComandoConversa.RegistrarQueixa;
 import br.com.consultorio.odonto.dominio.modelo.ComandoConversa.ReservarHorario;
-import br.com.consultorio.odonto.dominio.servico.ValidadorDados;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -19,13 +17,12 @@ import java.util.Optional;
 /**
  * Conversa de WhatsApp com um número (uma por número). Contém a máquina de estados do atendimento:
  * cada resposta do paciente é registrada em {@link #registrarResposta} e a conversa devolve a próxima
- * {@link AcaoConversa}. Quando a ação traz um comando, a camada de aplicação o executa e informa o
+ * {@link AcaoConversa}. A interpretação da resposta em cada etapa é delegada ao {@link TratadorEtapa} da etapa
+ * (padrão State, registrado no {@link FluxoConversa}); aqui ficam o ciclo de vida, as transições disparadas
+ * pelos resultados dos comandos e as regras comuns (tentativas, alertas, encaminhamento à equipe). Quando a ação traz um comando, a camada de aplicação o executa e informa o
  * resultado pelo método correspondente (ex.: {@link #pacienteEncontrado}), que devolve a ação seguinte.
  */
 public final class Conversa {
-
-    private static final ValidadorDados VALIDADOR = new ValidadorDados();
-    private static final int TAMANHO_MINIMO_QUEIXA = 3;
 
     private final Long id;
     private final WaId waId;
@@ -78,19 +75,13 @@ public final class Conversa {
             return AcaoConversa.silencio();
         }
         ultimaInteracao = agora;
-        return switch (etapa) {
-            case AGUARDANDO_RG -> tratarRg(resposta, regras);
-            case AGUARDANDO_NOME -> tratarNome(resposta, regras);
-            case AGUARDANDO_DATA_NASCIMENTO -> tratarDataNascimento(resposta, hoje, regras);
-            case AGUARDANDO_RESPONSAVEL -> tratarResponsavel(resposta, regras);
-            case AGUARDANDO_CONSENTIMENTO -> tratarConsentimento(resposta, regras);
-            case AGUARDANDO_CONFIRMACAO_NOVA_CONSULTA -> tratarNovaConsulta(resposta, regras);
-            case AGUARDANDO_PROBLEMA -> tratarProblema(resposta, regras);
-            case AGUARDANDO_DATA_HORA -> AcaoConversa.executar(new InterpretarDataHora(resposta));
-            case AGUARDANDO_CONFIRMACAO_SUGESTAO -> tratarConfirmacaoSugestao(resposta, regras);
-            case CONCLUIDA, ENCERRADA_SEM_CONSENTIMENTO, ENCAMINHADA_ATENDIMENTO_HUMANO ->
-                    throw new IllegalStateException("Etapa final já tratada: " + etapa);
-        };
+        TratadorEtapa tratador = FluxoConversa.PADRAO.tratadorDe(etapa);
+        ContextoEtapa contexto = new Contexto(hoje, regras);
+        try {
+            return tratador.tratar(resposta, contexto);
+        } catch (DadoInvalidoException e) {
+            return respostaInvalida(regras);
+        }
     }
 
     /** O paciente mandou algo que não é texto (figurinha, imagem) ou um áudio sem transcrição. */
@@ -112,103 +103,6 @@ public final class Conversa {
         iniciadaEm = agora;
         ultimaInteracao = agora;
         mudarPara(EtapaConversa.AGUARDANDO_RG);
-    }
-
-    private AcaoConversa tratarRg(String resposta, RegrasConversa regras) {
-        try {
-            DocumentoRg rg = VALIDADOR.validarRg(resposta);
-            dados = dados.comRg(rg);
-            return AcaoConversa.executar(new IdentificarPaciente(rg));
-        } catch (DadoInvalidoException e) {
-            return respostaInvalida(regras);
-        }
-    }
-
-    private AcaoConversa tratarNome(String resposta, RegrasConversa regras) {
-        try {
-            dados = dados.comNome(VALIDADOR.validarNomeCompleto(resposta));
-            mudarPara(EtapaConversa.AGUARDANDO_DATA_NASCIMENTO);
-            return AcaoConversa.responder(RespostaAgente.de(TipoResposta.PEDIR_DATA_NASCIMENTO));
-        } catch (DadoInvalidoException e) {
-            return respostaInvalida(regras);
-        }
-    }
-
-    private AcaoConversa tratarDataNascimento(String resposta, LocalDate hoje, RegrasConversa regras) {
-        try {
-            LocalDate nascimento = VALIDADOR.validarDataNascimento(resposta, hoje);
-            dados = dados.comDataNascimento(nascimento);
-            if (Paciente.idade(nascimento, hoje) < Paciente.MAIORIDADE) {
-                mudarPara(EtapaConversa.AGUARDANDO_RESPONSAVEL);
-                return AcaoConversa.responder(RespostaAgente.de(TipoResposta.PEDIR_RESPONSAVEL));
-            }
-            mudarPara(EtapaConversa.AGUARDANDO_CONSENTIMENTO);
-            return AcaoConversa.responder(RespostaAgente.de(TipoResposta.PEDIR_CONSENTIMENTO));
-        } catch (DadoInvalidoException e) {
-            return respostaInvalida(regras);
-        }
-    }
-
-    private AcaoConversa tratarResponsavel(String resposta, RegrasConversa regras) {
-        try {
-            dados = dados.comResponsavel(VALIDADOR.validarNomeCompleto(resposta));
-            mudarPara(EtapaConversa.AGUARDANDO_CONSENTIMENTO);
-            return AcaoConversa.responder(RespostaAgente.de(TipoResposta.PEDIR_CONSENTIMENTO));
-        } catch (DadoInvalidoException e) {
-            return respostaInvalida(regras);
-        }
-    }
-
-    private AcaoConversa tratarConsentimento(String resposta, RegrasConversa regras) {
-        Optional<Boolean> concorda = VALIDADOR.interpretarSimNao(resposta);
-        if (concorda.isEmpty()) {
-            return respostaInvalida(regras);
-        }
-        if (concorda.get()) {
-            return AcaoConversa.executar(new CadastrarPaciente(
-                    exigir(dados.rg(), "RG"), exigir(dados.nome(), "nome"),
-                    exigir(dados.dataNascimento(), "data de nascimento"), dados.responsavel()));
-        }
-        // Sem consentimento, os dados pessoais coletados são descartados.
-        dados = DadosConversa.vazio();
-        mudarPara(EtapaConversa.ENCERRADA_SEM_CONSENTIMENTO);
-        return AcaoConversa.responder(RespostaAgente.de(TipoResposta.SEM_CONSENTIMENTO))
-                .comAlerta(alerta(TipoAlerta.CONSENTIMENTO_RECUSADO,
-                        "Paciente novo recusou o consentimento para cadastro pelo WhatsApp e aguarda contato."));
-    }
-
-    private AcaoConversa tratarNovaConsulta(String resposta, RegrasConversa regras) {
-        Optional<Boolean> querOutra = VALIDADOR.interpretarSimNao(resposta);
-        if (querOutra.isEmpty()) {
-            return respostaInvalida(regras);
-        }
-        if (querOutra.get()) {
-            mudarPara(EtapaConversa.AGUARDANDO_PROBLEMA);
-            return AcaoConversa.responder(RespostaAgente.de(TipoResposta.PEDIR_PROBLEMA).comNome(dados.nomePaciente()));
-        }
-        mudarPara(EtapaConversa.CONCLUIDA);
-        RespostaAgente encerramento = RespostaAgente.de(TipoResposta.ENCERRAMENTO).comNome(dados.nomePaciente());
-        return AcaoConversa.responder(dados.consultaExistente().map(encerramento::comDataHora).orElse(encerramento));
-    }
-
-    private AcaoConversa tratarProblema(String resposta, RegrasConversa regras) {
-        if (resposta.length() < TAMANHO_MINIMO_QUEIXA) {
-            return respostaInvalida(regras);
-        }
-        return AcaoConversa.executar(new RegistrarQueixa(exigir(dados.pacienteId(), "paciente"), resposta));
-    }
-
-    private AcaoConversa tratarConfirmacaoSugestao(String resposta, RegrasConversa regras) {
-        Optional<Boolean> confirma = VALIDADOR.interpretarSimNao(resposta);
-        if (confirma.isPresent() && confirma.get()) {
-            return AcaoConversa.executar(reservar(exigir(dados.horarioSugerido(), "horário sugerido")));
-        }
-        if (confirma.isPresent()) {
-            dados = dados.comHorarioSugerido(Optional.empty());
-            mudarPara(EtapaConversa.AGUARDANDO_DATA_HORA);
-            return AcaoConversa.responder(RespostaAgente.de(TipoResposta.PEDIR_DATA_HORA));
-        }
-        return AcaoConversa.executar(new InterpretarDataHora(resposta));
     }
 
     // ---------------------------------------------------------------- resultados dos comandos
@@ -234,7 +128,7 @@ public final class Conversa {
         return AcaoConversa.responder(RespostaAgente.de(TipoResposta.PEDIR_NOME));
     }
 
-    /** Resultado de {@link CadastrarPaciente}: paciente e prontuário criados. */
+    /** Resultado de {@link ComandoConversa.CadastrarPaciente}: paciente e prontuário criados. */
     public AcaoConversa pacienteCadastrado(long pacienteId, String primeiroNome, String numeroProntuario) {
         exigirEtapa(EtapaConversa.AGUARDANDO_CONSENTIMENTO);
         dados = dados.comPaciente(pacienteId, primeiroNome, Optional.of(numeroProntuario));
@@ -296,7 +190,7 @@ public final class Conversa {
     }
 
     private ReservarHorario reservar(Horario horario) {
-        return new ReservarHorario(exigir(dados.pacienteId(), "paciente"), dados.queixaId(), horario);
+        return new ReservarHorario(ContextoEtapa.exigir(dados.pacienteId(), "paciente"), dados.queixaId(), horario);
     }
 
     private AcaoConversa respostaInvalida(RegrasConversa regras) {
@@ -346,8 +240,46 @@ public final class Conversa {
         }
     }
 
-    private static <T> T exigir(Optional<T> valor, String campo) {
-        return valor.orElseThrow(() -> new TransicaoInvalidaException("Dado da conversa ausente: " + campo + "."));
+    /** Visão restrita desta conversa entregue ao {@link TratadorEtapa} da etapa atual. */
+    private final class Contexto implements ContextoEtapa {
+
+        private final LocalDate hoje;
+        private final RegrasConversa regras;
+
+        private Contexto(LocalDate hoje, RegrasConversa regras) {
+            this.hoje = hoje;
+            this.regras = regras;
+        }
+
+        @Override
+        public DadosConversa dados() {
+            return dados;
+        }
+
+        @Override
+        public void atualizar(DadosConversa novosDados) {
+            dados = Objects.requireNonNull(novosDados, "dados");
+        }
+
+        @Override
+        public void avancarPara(EtapaConversa novaEtapa) {
+            mudarPara(novaEtapa);
+        }
+
+        @Override
+        public LocalDate hoje() {
+            return hoje;
+        }
+
+        @Override
+        public AcaoConversa respostaInvalida() {
+            return Conversa.this.respostaInvalida(regras);
+        }
+
+        @Override
+        public AlertaConversa alerta(TipoAlerta tipo, String resumo) {
+            return Conversa.this.alerta(tipo, resumo);
+        }
     }
 
     // ---------------------------------------------------------------- consultas

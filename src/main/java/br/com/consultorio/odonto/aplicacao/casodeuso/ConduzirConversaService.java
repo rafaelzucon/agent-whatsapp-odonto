@@ -1,5 +1,6 @@
 package br.com.consultorio.odonto.aplicacao.casodeuso;
 
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.ProcessadorComandosConversa;
 import br.com.consultorio.odonto.aplicacao.config.ConfiguracaoConversa;
 import br.com.consultorio.odonto.aplicacao.excecao.RecursoNaoEncontradoException;
 import br.com.consultorio.odonto.aplicacao.porta.entrada.ConduzirConversaUseCase;

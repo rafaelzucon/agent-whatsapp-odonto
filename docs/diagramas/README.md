@@ -101,7 +101,7 @@ flowchart TB
 
 ## 3. Componentes, portas e adaptadores
 
-Como os adaptadores de entrada chamam as portas de entrada (casos de uso) e como os adaptadores de saída implementam as portas de saída.
+Como os adaptadores de entrada chamam as portas de entrada (casos de uso) e como os adaptadores de saída implementam as portas de saída. As estratégias (executores de comando, cadeias de interpretação e classificação, canais de notificação) são escolhidas e ordenadas no `CasosDeUsoConfig`.
 
 Fonte: [`fonte/03-componentes.mmd`](fonte/03-componentes.mmd)
 
@@ -116,11 +116,12 @@ flowchart LR
 
     subgraph app["Aplicação"]
         rec["ReceberMensagensUseCase"]
-        cond["ConduzirConversaUseCase<br/>ProcessadorComandosConversa<br/>RespondedorPaciente"]
+        cond["ConduzirConversaUseCase<br/>ProcessadorComandosConversa → ExecutorComando (1 por comando)<br/>RespondedorPaciente"]
+        interp["InterpretadorPreferenciaHorario<br/>(cadeia: determinística → IA)"]
         ident["IdentificarPaciente · CadastrarPaciente"]
-        queixa["RegistrarQueixaUseCase"]
+        queixa["RegistrarQueixaUseCase<br/>ClassificadorQueixa (cadeia: IA → palavras-chave)"]
         agendar["AgendarConsultaUseCase"]
-        notif["NotificarConsultorioUseCase"]
+        notif["NotificarConsultorioUseCase<br/>NotificacaoMultiCanal (composite)"]
         transc["TranscreverAudioUseCase"]
         adm["GerenciarAgenda · ConsultarPacientes<br/>ReclassificarQueixa · ConsultarCatalogo"]
         manut["ExpirarConversas · ExpurgarMensagens"]
@@ -143,7 +144,7 @@ flowchart LR
     tar --> manut
     api --> adm
     queixa --> ia
-    cond --> ia
+    cond --> interp --> ia
     transc --> wa & wsp
     cond --> wa
     notif --> canais
@@ -152,7 +153,7 @@ flowchart LR
 
 ## 4. Máquina de estados da conversa
 
-Etapas fixas da `Conversa` (workflow agêntico previsível e auditável).
+Etapas fixas da `Conversa` (workflow agêntico previsível e auditável). Cada etapa é tratada por um `TratadorEtapa` próprio (padrão State), registrado no `FluxoConversa`: uma etapa nova é uma classe nova, sem crescer um `switch` na `Conversa`.
 
 Fonte: [`fonte/04-maquina-estados-conversa.mmd`](fonte/04-maquina-estados-conversa.mmd)
 
@@ -194,6 +195,12 @@ stateDiagram-v2
         após N respostas inválidas seguidas
         (NAO_ENTENDI + dica da etapa).
         O agente fica em silêncio até expirar.
+    end note
+
+    note left of AGUARDANDO_RG
+        Cada etapa não final tem o seu
+        TratadorEtapa (padrão State),
+        registrado no FluxoConversa.
     end note
 ```
 
@@ -377,6 +384,22 @@ classDiagram
         +disponibilidadeVerificada(...) AcaoConversa
         +consultaAgendada(Horario) AcaoConversa
     }
+    class FluxoConversa {
+        <<registry>>
+        -Map tratadoresPorEtapa
+        +tratadorDe(EtapaConversa) TratadorEtapa
+    }
+    class TratadorEtapa {
+        <<interface>>
+        +tratar(resposta, ContextoEtapa) AcaoConversa
+    }
+    class ContextoEtapa {
+        <<interface>>
+        +dados() DadosConversa
+        +avancarPara(EtapaConversa)
+        +respostaInvalida() AcaoConversa
+        +alerta(TipoAlerta, resumo) AlertaConversa
+    }
     class AcaoConversa {
         <<record>>
         List~RespostaAgente~ respostas
@@ -436,6 +459,10 @@ classDiagram
     Conversa *-- WaId
     Conversa --> EtapaConversa
     Conversa ..> AcaoConversa : devolve
+    Conversa ..> FluxoConversa : delega a etapa
+    FluxoConversa o-- TratadorEtapa
+    TratadorEtapa ..> ContextoEtapa : usa
+    Conversa ..|> ContextoEtapa : contexto interno
     ProblemaOdontologico --> Prioridade
     Agenda ..> Horario
 ```

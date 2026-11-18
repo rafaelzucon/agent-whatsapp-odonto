@@ -1,6 +1,7 @@
 package br.com.consultorio.odonto.adaptador.saida.notificacao;
 
 import br.com.consultorio.odonto.aplicacao.config.ConfiguracaoNotificacao;
+import br.com.consultorio.odonto.aplicacao.excecao.FalhaIntegracaoException;
 import br.com.consultorio.odonto.aplicacao.porta.saida.AlertaConsultorio;
 import br.com.consultorio.odonto.aplicacao.porta.saida.AvisoAgendamento;
 import br.com.consultorio.odonto.aplicacao.porta.saida.CanalNotificacaoConsultorio;
@@ -48,7 +49,9 @@ public class WhatsAppCanalNotificacao implements CanalNotificacaoConsultorio {
     }
 
     private void enviar(String template, List<String> parametros, String texto) {
-        WaId numero = destino.numeroNotificacao().orElseThrow();
+        // Mesmo contrato dos demais canais (LSP): chamado sem configuração, falha com FalhaIntegracaoException.
+        WaId numero = destino.numeroNotificacao().orElseThrow(
+                () -> new FalhaIntegracaoException("Número de notificação do WhatsApp não configurado."));
         if (configuracao.usarTemplate()) {
             enviador.enviarTemplate(numero, template, configuracao.idioma(), parametros);
         } else {

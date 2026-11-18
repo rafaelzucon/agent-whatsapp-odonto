@@ -3,10 +3,12 @@ package br.com.consultorio.odonto.aplicacao.porta.saida;
 import br.com.consultorio.odonto.aplicacao.excecao.MensagemDuplicadaException;
 import br.com.consultorio.odonto.dominio.modelo.Mensagem;
 
-import java.time.Instant;
 import java.util.Optional;
 
-/** Mensagens de WhatsApp recebidas e enviadas (texto cifrado). Nunca devolve {@code null}. */
+/**
+ * Mensagens de WhatsApp recebidas e enviadas (texto cifrado). Nunca devolve {@code null}. A remoção por
+ * retenção fica em {@link RetencaoMensagens}, usada só pela rotina de expurgo (ISP).
+ */
 public interface MensagemRepositorio {
 
     /**
@@ -19,7 +21,4 @@ public interface MensagemRepositorio {
     boolean existePorWaMessageId(String waMessageId);
 
     Optional<Mensagem> buscarPorId(long id);
-
-    /** Apaga as mensagens criadas antes de {@code limite}; devolve quantas. */
-    int removerAnterioresA(Instant limite);
 }

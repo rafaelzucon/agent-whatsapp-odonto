@@ -3,6 +3,7 @@ package br.com.consultorio.odonto.adaptador.saida.persistencia;
 import br.com.consultorio.odonto.adaptador.saida.persistencia.entidade.ConversaEntity;
 import br.com.consultorio.odonto.adaptador.saida.persistencia.jpa.ConversaJpaRepository;
 import br.com.consultorio.odonto.aplicacao.porta.saida.ConversaRepositorio;
+import br.com.consultorio.odonto.aplicacao.porta.saida.RetencaoConversas;
 import br.com.consultorio.odonto.dominio.modelo.Conversa;
 import br.com.consultorio.odonto.dominio.modelo.EtapaConversa;
 import br.com.consultorio.odonto.dominio.modelo.WaId;
@@ -17,7 +18,7 @@ import java.util.Set;
 /** Estado das conversas. Os dados coletados (RG, nome, nascimento...) são serializados em JSON e cifrados. */
 @Repository
 @Transactional(readOnly = true)
-public class ConversaJpaAdapter implements ConversaRepositorio {
+public class ConversaJpaAdapter implements ConversaRepositorio, RetencaoConversas {
 
     private final ConversaJpaRepository repositorio;
     private final JsonMapper json;

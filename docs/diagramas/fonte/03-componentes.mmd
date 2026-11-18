@@ -8,11 +8,12 @@ flowchart LR
 
     subgraph app["Aplicação"]
         rec["ReceberMensagensUseCase"]
-        cond["ConduzirConversaUseCase<br/>ProcessadorComandosConversa<br/>RespondedorPaciente"]
+        cond["ConduzirConversaUseCase<br/>ProcessadorComandosConversa → ExecutorComando (1 por comando)<br/>RespondedorPaciente"]
+        interp["InterpretadorPreferenciaHorario<br/>(cadeia: determinística → IA)"]
         ident["IdentificarPaciente · CadastrarPaciente"]
-        queixa["RegistrarQueixaUseCase"]
+        queixa["RegistrarQueixaUseCase<br/>ClassificadorQueixa (cadeia: IA → palavras-chave)"]
         agendar["AgendarConsultaUseCase"]
-        notif["NotificarConsultorioUseCase"]
+        notif["NotificarConsultorioUseCase<br/>NotificacaoMultiCanal (composite)"]
         transc["TranscreverAudioUseCase"]
         adm["GerenciarAgenda · ConsultarPacientes<br/>ReclassificarQueixa · ConsultarCatalogo"]
         manut["ExpirarConversas · ExpurgarMensagens"]
@@ -35,7 +36,7 @@ flowchart LR
     tar --> manut
     api --> adm
     queixa --> ia
-    cond --> ia
+    cond --> interp --> ia
     transc --> wa & wsp
     cond --> wa
     notif --> canais

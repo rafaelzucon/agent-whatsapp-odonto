@@ -16,6 +16,7 @@ O fluxo é um **workflow agêntico com etapas fixas** (máquina de estados da co
 
 - [Exemplo de conversa](#exemplo-de-conversa)
 - [Arquitetura](#arquitetura)
+- [Princípios SOLID](#princípios-solid)
 - [Stack e versões](#stack-e-versões)
 - [Pré-requisitos](#pré-requisitos)
 - [Configurando o WhatsApp na Meta](#configurando-o-whatsapp-na-meta)
@@ -73,14 +74,28 @@ infraestrutura   (Spring Boot, composição dos casos de uso, propriedades)
 
 | Pacote (`br.com.consultorio.odonto`) | Responsabilidade |
 |---|---|
-| `dominio.modelo` | Modelo rico: `Paciente`, `Prontuario`, `QueixaRelatada`, `ProblemaOdontologico`, `Consulta`, `Conversa` (máquina de estados: `registrarResposta(...)` devolve uma `AcaoConversa`), objetos de valor (`DocumentoRg`, `WaId`, `Horario`, `JanelaAtendimento`, `Prioridade`). |
+| `dominio.modelo` | Modelo rico: `Paciente`, `Prontuario`, `QueixaRelatada`, `ProblemaOdontologico`, `Consulta`, `Conversa` (máquina de estados: `registrarResposta(...)` devolve uma `AcaoConversa`; cada etapa tem o seu `TratadorEtapa`, registrado no `FluxoConversa`), objetos de valor (`DocumentoRg`, `WaId`, `Horario`, `JanelaAtendimento`, `Prioridade`). |
 | `dominio.servico` | `Agenda` (horário livre mais próximo), `ClassificadorPorPalavraChave`, `DetectorSinaisAlarme`, `InterpretadorDataHoraDeterministico`, `ValidadorDados`. |
-| `aplicacao` | Casos de uso (`ConduzirConversa`, `IdentificarPaciente`, `CadastrarPaciente`, `RegistrarQueixa`, `AgendarConsulta`, `NotificarConsultorio`, `TranscreverAudio`, `GerenciarAgenda`...) e as portas que eles usam. Não depende de Spring. |
+| `aplicacao` | Casos de uso (`ConduzirConversa`, `IdentificarPaciente`, `CadastrarPaciente`, `RegistrarQueixa`, `AgendarConsulta`, `NotificarConsultorio`, `TranscreverAudio`, `GerenciarAgenda`...) e as portas que eles usam. Subpacotes `casodeuso.comando` (um `ExecutorComando` por comando da conversa), `casodeuso.interpretacao` (cadeia determinística → IA para data/hora) e `casodeuso.classificacao` (cadeia IA → palavras-chave para a queixa). Não depende de Spring. |
 | `adaptador.entrada` | `WebhookController` (verificação e assinatura da Meta), `OuvinteEventos` (assíncrono, trava por conversa), `TarefasAgendadas`, controladores da API administrativa. |
 | `adaptador.saida` | Persistência JPA com criptografia, `WhatsAppCloudApiAdapter`, adaptadores Claude e Whisper (Spring AI), canais de notificação (WhatsApp, e-mail, log). |
-| `infraestrutura` | `AgenteOdontoApplication`, `OdontoProperties`, `CasosDeUsoConfig` (cria os casos de uso sem anotações Spring na aplicação). |
+| `infraestrutura` | `AgenteOdontoApplication`, `OdontoProperties`, `CasosDeUsoConfig` (composition root: cria os casos de uso sem anotações Spring na aplicação e escolhe/ordena as estratégias). |
 
 Fluxo de uma mensagem: a Meta chama `POST /webhook/whatsapp` → valida a assinatura `X-Hub-Signature-256` → grava a mensagem (o `wa_message_id` único descarta reenvios) → responde **200 imediatamente** → depois do commit, um ouvinte assíncrono (virtual threads) processa a conversa com trava por número → envia as respostas pela Graph API. Detalhes nos [diagramas de sequência](docs/diagramas/README.md#7-sequência-webhook-e-processamento-assíncrono).
+
+## Princípios SOLID
+
+A Clean Architecture dá a estrutura; os princípios SOLID guiam o desenho das classes dentro de cada camada. A tabela mostra **onde se vê** cada princípio no código:
+
+| Princípio | O que significa aqui | Onde se vê |
+|---|---|---|
+| **S** — Responsabilidade única (SRP) | Cada classe tem um único motivo para mudar. | <ul><li>`Conversa` cuida do ciclo de vida e das transições; a interpretação da resposta de cada etapa fica em um `TratadorEtapa` próprio (`TratadorRg`, `TratadorNome`, `TratadorConsentimento`, `TratadorProblema`...).</li><li>Um `ExecutorComando` por comando da conversa (`IdentificarPacienteExecutor`, `RegistrarQueixaExecutor`, `ReservarHorarioExecutor`...).</li><li>`RegistrarQueixaService` só orquestra classificar e persistir; a classificação está no `ClassificadorQueixa`.</li><li>`NotificarConsultorioService` só monta o aviso; o envio a vários canais e o isolamento de falhas ficam no `NotificacaoMultiCanal`.</li><li>`RespondedorPacienteWhatsApp` renderiza, envia e registra a resposta; `ConduzirConversaService` só conduz o fluxo.</li><li>Serviços de domínio focados: `Agenda`, `ValidadorDados`, `DetectorSinaisAlarme`, `ClassificadorPorPalavraChave`, `InterpretadorDataHoraDeterministico`.</li></ul> |
+| **O** — Aberto/fechado (OCP) | Estender comportamento acrescentando classes, sem editar as existentes. | <ul><li>Etapa nova da conversa: um `TratadorEtapa` novo registrado no `FluxoConversa` (que falha na criação se alguma etapa ficar sem tratador).</li><li>Comando novo: um `ExecutorComando` novo registrado no `ProcessadorComandosPorTipo` (que falha na subida se algum `ComandoConversa` ficar sem executor ou tiver dois).</li><li>Nova forma de classificar a queixa ou de entender a data: uma `EstrategiaClassificacao` ou um `InterpretadorPreferenciaHorario` novo na cadeia (`ClassificadorQueixaEmCadeia`, `InterpretacaoEmCadeia`).</li><li>Novo canal de aviso ao consultório: um `CanalNotificacaoConsultorio` novo (bean Spring), entregue ao `NotificacaoMultiCanal`.</li><li>Ordem e escolha das estratégias ficam só no `CasosDeUsoConfig`.</li></ul> |
+| **L** — Substituição de Liskov (LSP) | Qualquer implementação de uma porta pode substituir outra sem surpresas. | <ul><li>Os canais `WhatsAppCanalNotificacao`, `EmailCanalNotificacao` e `LogCanalNotificacao` seguem o mesmo contrato: `habilitado()` diz se podem ser chamados e falhas viram `FalhaIntegracaoException` (o canal do WhatsApp sem número configurado também — `WhatsAppCanalNotificacaoTest`).</li><li>O próprio `NotificacaoMultiCanal` é um `CanalNotificacaoConsultorio` (composite) e pode ser usado onde se espera um canal.</li><li>Adaptadores de IA, transcrição e WhatsApp traduzem erros técnicos para `FalhaIntegracaoException`, documentada nas portas; os casos de uso aplicam o mesmo fallback qualquer que seja a implementação.</li><li>Os fakes em memória dos testes (`Fakes`) substituem os adaptadores JPA, WhatsApp e Claude sem mudar os casos de uso.</li></ul> |
+| **I** — Segregação de interfaces (ISP) | Clientes dependem só dos métodos que usam. | <ul><li>`EnviadorWhatsApp` é a soma de `EnviadorTextoWhatsApp` (usado pelo `RespondedorPacienteWhatsApp`) e `EnviadorTemplateWhatsApp`.</li><li>A remoção por retenção saiu dos repositórios: `RetencaoMensagens` e `RetencaoConversas` são usadas só por `ExpurgarMensagensService` e `ExpirarConversasService`; a conversa usa `ConversaRepositorio` sem métodos de expurgo.</li><li>`ProvedorMidia` separado do envio de mensagens, embora o `WhatsAppCloudApiAdapter` implemente os dois.</li><li>`ContextoEtapa` expõe ao tratador só o que ele precisa da `Conversa` (dados, etapa, tentativa inválida, alerta).</li><li>Uma porta de entrada por caso de uso (`*UseCase`), para que cada adaptador de entrada veja só o que chama.</li></ul> |
+| **D** — Inversão de dependência (DIP) | Políticas de alto nível dependem de abstrações; detalhes implementam essas abstrações. | <ul><li>Portas de saída (`aplicacao.porta.saida`) definidas pela aplicação e implementadas pelos adaptadores (JPA, WhatsApp, Claude, Whisper, e-mail).</li><li>`ConduzirConversaService` depende das interfaces `ProcessadorComandosConversa` e `RespondedorPaciente`; `RegistrarQueixaService` de `ClassificadorQueixa`; `NotificarConsultorioService` de `CanalNotificacaoConsultorio`.</li><li>Domínio e aplicação não têm anotações nem dependências de framework; a composição acontece no `CasosDeUsoConfig`, com injeção pelo construtor.</li><li>Verificado pelo `ArquiteturaTest`: regra de dependência entre camadas, aplicação sem Spring e a regra `dependencias_apontam_para_abstracoes` (campos de casos de uso e adaptadores não podem ter o tipo de uma classe concreta que implementa uma interface do sistema).</li></ul> |
+
+Pontos mantidos de propósito: o `switch` sobre a tarefa no `TarefaManutencaoAdapter` (o enum é fechado e o compilador avisa quando falta um caso) e os repositórios por agregado (`PacienteRepositorio`, `ConsultaRepositorio`), cujos métodos são usados pelos mesmos casos de uso.
 
 ## Stack e versões
 
@@ -301,7 +316,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/
 - **Aplicação:** casos de uso com Mockito e fakes em memória, incluindo o fluxo completo da conversa.
 - **Adaptadores:** assinatura do webhook, conversão do payload da Meta, criptografia, adaptadores de IA com respostas simuladas.
 - **Configuração:** o `application.yml` real é carregado e todos os textos são renderizados sem marcadores sobrando.
-- **Arquitetura (`ArquiteturaTest`):** domínio só usa `java.*`; camadas respeitam a regra de dependência; aplicação sem Spring; Spring AI só nos adaptadores de IA e transcrição; JPA só na persistência; sem ciclos entre pacotes; controladores só falam com portas de entrada; sem injeção por campo.
+- **Arquitetura (`ArquiteturaTest`):** domínio só usa `java.*`; camadas respeitam a regra de dependência; aplicação sem Spring; Spring AI só nos adaptadores de IA e transcrição; JPA só na persistência; sem ciclos entre pacotes; controladores só falam com portas de entrada; campos de casos de uso e adaptadores guardam abstrações, nunca implementações do sistema (DIP); sem injeção por campo.
 
 Para rodar localmente sem Docker, suba um PostgreSQL 18 e informe `DB_URL=jdbc:postgresql://localhost:5432/odonto`, `DB_USUARIO` e `DB_SENHA`, além das demais variáveis, e rode `./mvnw spring-boot:run`. Para receber webhooks na sua máquina, use um túnel HTTPS (Cloudflare Tunnel, ngrok).
 

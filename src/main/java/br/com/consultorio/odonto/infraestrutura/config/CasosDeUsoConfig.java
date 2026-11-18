@@ -10,13 +10,27 @@ import br.com.consultorio.odonto.aplicacao.casodeuso.ExpurgarMensagensService;
 import br.com.consultorio.odonto.aplicacao.casodeuso.GerenciarAgendaService;
 import br.com.consultorio.odonto.aplicacao.casodeuso.IdentificarPacienteService;
 import br.com.consultorio.odonto.aplicacao.casodeuso.MontadorVisoes;
+import br.com.consultorio.odonto.aplicacao.casodeuso.NotificacaoMultiCanal;
 import br.com.consultorio.odonto.aplicacao.casodeuso.NotificarConsultorioService;
-import br.com.consultorio.odonto.aplicacao.casodeuso.ProcessadorComandosConversa;
 import br.com.consultorio.odonto.aplicacao.casodeuso.ReceberMensagensService;
 import br.com.consultorio.odonto.aplicacao.casodeuso.ReclassificarQueixaService;
 import br.com.consultorio.odonto.aplicacao.casodeuso.RegistrarQueixaService;
-import br.com.consultorio.odonto.aplicacao.casodeuso.RespondedorPaciente;
+import br.com.consultorio.odonto.aplicacao.casodeuso.RespondedorPacienteWhatsApp;
 import br.com.consultorio.odonto.aplicacao.casodeuso.TranscreverAudioService;
+import br.com.consultorio.odonto.aplicacao.casodeuso.classificacao.ClassificacaoPorIA;
+import br.com.consultorio.odonto.aplicacao.casodeuso.classificacao.ClassificacaoPorPalavraChave;
+import br.com.consultorio.odonto.aplicacao.casodeuso.classificacao.ClassificadorQueixaEmCadeia;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.BuscarPrimeiroHorarioLivreExecutor;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.CadastrarPacienteExecutor;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.IdentificarPacienteExecutor;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.InterpretarDataHoraExecutor;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.ProcessadorComandosConversa;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.ProcessadorComandosPorTipo;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.RegistrarQueixaExecutor;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.ReservarHorarioExecutor;
+import br.com.consultorio.odonto.aplicacao.casodeuso.interpretacao.InterpretacaoDeterministica;
+import br.com.consultorio.odonto.aplicacao.casodeuso.interpretacao.InterpretacaoEmCadeia;
+import br.com.consultorio.odonto.aplicacao.casodeuso.interpretacao.InterpretacaoPorIA;
 import br.com.consultorio.odonto.aplicacao.config.ConfiguracaoAgenda;
 import br.com.consultorio.odonto.aplicacao.config.ConfiguracaoConversa;
 import br.com.consultorio.odonto.aplicacao.config.ConfiguracaoNotificacao;
@@ -43,7 +57,7 @@ import br.com.consultorio.odonto.aplicacao.porta.saida.CifradorDocumento;
 import br.com.consultorio.odonto.aplicacao.porta.saida.ClassificadorProblemaIA;
 import br.com.consultorio.odonto.aplicacao.porta.saida.ConsultaRepositorio;
 import br.com.consultorio.odonto.aplicacao.porta.saida.ConversaRepositorio;
-import br.com.consultorio.odonto.aplicacao.porta.saida.EnviadorWhatsApp;
+import br.com.consultorio.odonto.aplicacao.porta.saida.EnviadorTextoWhatsApp;
 import br.com.consultorio.odonto.aplicacao.porta.saida.ExecutorTransacional;
 import br.com.consultorio.odonto.aplicacao.porta.saida.InterpretadorDataHoraIA;
 import br.com.consultorio.odonto.aplicacao.porta.saida.MensagemRepositorio;
@@ -52,6 +66,8 @@ import br.com.consultorio.odonto.aplicacao.porta.saida.ProntuarioRepositorio;
 import br.com.consultorio.odonto.aplicacao.porta.saida.ProvedorMidia;
 import br.com.consultorio.odonto.aplicacao.porta.saida.PublicadorEventos;
 import br.com.consultorio.odonto.aplicacao.porta.saida.Relogio;
+import br.com.consultorio.odonto.aplicacao.porta.saida.RetencaoConversas;
+import br.com.consultorio.odonto.aplicacao.porta.saida.RetencaoMensagens;
 import br.com.consultorio.odonto.aplicacao.porta.saida.TranscritorAudio;
 import br.com.consultorio.odonto.dominio.servico.ClassificadorPorPalavraChave;
 import br.com.consultorio.odonto.dominio.servico.DetectorSinaisAlarme;
@@ -62,8 +78,10 @@ import org.springframework.context.annotation.Configuration;
 import java.util.List;
 
 /**
- * Composição dos casos de uso. Domínio e aplicação não têm anotações de framework: são montados aqui,
- * recebendo os adaptadores pelas portas de saída (inversão de dependência).
+ * Composição dos casos de uso (composition root). Domínio e aplicação não têm anotações de framework: são montados
+ * aqui, recebendo os adaptadores pelas portas de saída (inversão de dependência). É também aqui que se escolhem e
+ * ordenam as estratégias (classificação, interpretação de data, executores de comando, canais de notificação):
+ * estender o comportamento é registrar uma implementação nova, sem alterar os casos de uso (aberto/fechado).
  */
 @Configuration(proxyBeanMethods = false)
 public class CasosDeUsoConfig {
@@ -95,8 +113,10 @@ public class CasosDeUsoConfig {
                                                   ClassificadorProblemaIA classificadorIA,
                                                   ConfiguracaoConversa configuracao, ExecutorTransacional transacao,
                                                   Relogio relogio) {
-        return new RegistrarQueixaService(prontuarios, catalogo, classificadorIA, new ClassificadorPorPalavraChave(),
-                new DetectorSinaisAlarme(), configuracao, transacao, relogio);
+        ClassificadorQueixaEmCadeia classificador = new ClassificadorQueixaEmCadeia(catalogo, List.of(
+                new ClassificacaoPorIA(classificadorIA, configuracao.confiancaMinima()),
+                new ClassificacaoPorPalavraChave(new ClassificadorPorPalavraChave())), new DetectorSinaisAlarme());
+        return new RegistrarQueixaService(prontuarios, classificador, transacao, relogio);
     }
 
     @Bean
@@ -113,7 +133,7 @@ public class CasosDeUsoConfig {
                                                             ConsultaRepositorio consultas,
                                                             PacienteRepositorio pacientes,
                                                             ProntuarioRepositorio prontuarios) {
-        return new NotificarConsultorioService(canais, consultas, pacientes, prontuarios);
+        return new NotificarConsultorioService(new NotificacaoMultiCanal(canais), consultas, pacientes, prontuarios);
     }
 
     @Bean
@@ -130,14 +150,21 @@ public class CasosDeUsoConfig {
                                                     RegistrarQueixaUseCase registrarQueixa,
                                                     AgendarConsultaUseCase agendar,
                                                     InterpretadorDataHoraIA interpretadorIA,
-                                                    EnviadorWhatsApp enviador, MensagensConversa textos,
+                                                    EnviadorTextoWhatsApp enviador, MensagensConversa textos,
                                                     ConfiguracaoConversa configuracao, Relogio relogio) {
-        ProcessadorComandosConversa processador = new ProcessadorComandosConversa(identificar, cadastrar,
-                registrarQueixa, agendar, new InterpretadorDataHoraDeterministico(), interpretadorIA, configuracao,
-                relogio);
-        RespondedorPaciente respondedor = new RespondedorPaciente(enviador, mensagens, textos, relogio);
-        return new ConduzirConversaService(mensagens, conversas, transcrever, notificar, processador, respondedor,
-                configuracao, relogio);
+        // Determinística primeiro (rápida e previsível); a IA só entra se ela não entender.
+        InterpretacaoEmCadeia interpretador = new InterpretacaoEmCadeia(List.of(
+                new InterpretacaoDeterministica(new InterpretadorDataHoraDeterministico(), relogio),
+                new InterpretacaoPorIA(interpretadorIA, relogio)));
+        ProcessadorComandosConversa processador = new ProcessadorComandosPorTipo(List.of(
+                new IdentificarPacienteExecutor(identificar),
+                new CadastrarPacienteExecutor(cadastrar),
+                new RegistrarQueixaExecutor(registrarQueixa),
+                new InterpretarDataHoraExecutor(interpretador, agendar, configuracao),
+                new BuscarPrimeiroHorarioLivreExecutor(agendar, configuracao),
+                new ReservarHorarioExecutor(agendar, configuracao)));
+        return new ConduzirConversaService(mensagens, conversas, transcrever, notificar, processador,
+                new RespondedorPacienteWhatsApp(enviador, mensagens, textos, relogio), configuracao, relogio);
     }
 
     @Bean
@@ -176,13 +203,13 @@ public class CasosDeUsoConfig {
     }
 
     @Bean
-    ExpirarConversasUseCase expirarConversasUseCase(ConversaRepositorio conversas, ConfiguracaoConversa configuracao,
+    ExpirarConversasUseCase expirarConversasUseCase(RetencaoConversas conversas, ConfiguracaoConversa configuracao,
                                                     Relogio relogio) {
         return new ExpirarConversasService(conversas, configuracao, relogio);
     }
 
     @Bean
-    ExpurgarMensagensUseCase expurgarMensagensUseCase(MensagemRepositorio mensagens, ConversaRepositorio conversas,
+    ExpurgarMensagensUseCase expurgarMensagensUseCase(RetencaoMensagens mensagens, RetencaoConversas conversas,
                                                       ConfiguracaoRetencao retencao, ExecutorTransacional transacao,
                                                       Relogio relogio) {
         return new ExpurgarMensagensService(mensagens, conversas, retencao, transacao, relogio);

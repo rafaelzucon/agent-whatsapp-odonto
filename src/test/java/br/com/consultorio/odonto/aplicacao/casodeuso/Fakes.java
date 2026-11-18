@@ -22,6 +22,8 @@ import br.com.consultorio.odonto.aplicacao.porta.saida.ProntuarioRepositorio;
 import br.com.consultorio.odonto.aplicacao.porta.saida.ProvedorMidia;
 import br.com.consultorio.odonto.aplicacao.porta.saida.PublicadorEventos;
 import br.com.consultorio.odonto.aplicacao.porta.saida.Relogio;
+import br.com.consultorio.odonto.aplicacao.porta.saida.RetencaoConversas;
+import br.com.consultorio.odonto.aplicacao.porta.saida.RetencaoMensagens;
 import br.com.consultorio.odonto.aplicacao.porta.saida.TranscritorAudio;
 import br.com.consultorio.odonto.dominio.excecao.HorarioIndisponivelException;
 import br.com.consultorio.odonto.dominio.excecao.MotivoIndisponibilidade;
@@ -241,7 +243,7 @@ final class Fakes {
         }
     }
 
-    static final class ConversasEmMemoria implements ConversaRepositorio {
+    static final class ConversasEmMemoria implements ConversaRepositorio, RetencaoConversas {
         final Map<WaId, Conversa> porWaId = new LinkedHashMap<>();
         private final AtomicLong sequencia = new AtomicLong();
 
@@ -270,7 +272,7 @@ final class Fakes {
         }
     }
 
-    static final class MensagensEmMemoria implements MensagemRepositorio {
+    static final class MensagensEmMemoria implements MensagemRepositorio, RetencaoMensagens {
         final Map<Long, Mensagem> porId = new LinkedHashMap<>();
         private final AtomicLong sequencia = new AtomicLong();
 

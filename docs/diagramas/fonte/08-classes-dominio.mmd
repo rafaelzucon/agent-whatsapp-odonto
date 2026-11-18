@@ -55,6 +55,22 @@ classDiagram
         +disponibilidadeVerificada(...) AcaoConversa
         +consultaAgendada(Horario) AcaoConversa
     }
+    class FluxoConversa {
+        <<registry>>
+        -Map tratadoresPorEtapa
+        +tratadorDe(EtapaConversa) TratadorEtapa
+    }
+    class TratadorEtapa {
+        <<interface>>
+        +tratar(resposta, ContextoEtapa) AcaoConversa
+    }
+    class ContextoEtapa {
+        <<interface>>
+        +dados() DadosConversa
+        +avancarPara(EtapaConversa)
+        +respostaInvalida() AcaoConversa
+        +alerta(TipoAlerta, resumo) AlertaConversa
+    }
     class AcaoConversa {
         <<record>>
         List~RespostaAgente~ respostas
@@ -114,5 +130,9 @@ classDiagram
     Conversa *-- WaId
     Conversa --> EtapaConversa
     Conversa ..> AcaoConversa : devolve
+    Conversa ..> FluxoConversa : delega a etapa
+    FluxoConversa o-- TratadorEtapa
+    TratadorEtapa ..> ContextoEtapa : usa
+    Conversa ..|> ContextoEtapa : contexto interno
     ProblemaOdontologico --> Prioridade
     Agenda ..> Horario

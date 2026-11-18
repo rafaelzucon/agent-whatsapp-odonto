@@ -17,6 +17,19 @@ import br.com.consultorio.odonto.aplicacao.casodeuso.Fakes.PublicadorFake;
 import br.com.consultorio.odonto.aplicacao.casodeuso.Fakes.RelogioFixo;
 import br.com.consultorio.odonto.aplicacao.casodeuso.Fakes.TransacaoDireta;
 import br.com.consultorio.odonto.aplicacao.casodeuso.Fakes.TranscritorFake;
+import br.com.consultorio.odonto.aplicacao.casodeuso.classificacao.ClassificacaoPorIA;
+import br.com.consultorio.odonto.aplicacao.casodeuso.classificacao.ClassificacaoPorPalavraChave;
+import br.com.consultorio.odonto.aplicacao.casodeuso.classificacao.ClassificadorQueixaEmCadeia;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.BuscarPrimeiroHorarioLivreExecutor;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.CadastrarPacienteExecutor;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.IdentificarPacienteExecutor;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.InterpretarDataHoraExecutor;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.ProcessadorComandosPorTipo;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.RegistrarQueixaExecutor;
+import br.com.consultorio.odonto.aplicacao.casodeuso.comando.ReservarHorarioExecutor;
+import br.com.consultorio.odonto.aplicacao.casodeuso.interpretacao.InterpretacaoDeterministica;
+import br.com.consultorio.odonto.aplicacao.casodeuso.interpretacao.InterpretacaoEmCadeia;
+import br.com.consultorio.odonto.aplicacao.casodeuso.interpretacao.InterpretacaoPorIA;
 import br.com.consultorio.odonto.aplicacao.config.ConfiguracaoAgenda;
 import br.com.consultorio.odonto.aplicacao.config.ConfiguracaoConversa;
 import br.com.consultorio.odonto.aplicacao.config.ConfiguracaoNotificacao;
@@ -89,17 +102,27 @@ final class Cenario {
             transacao, relogio);
     final CadastrarPacienteService cadastrar = new CadastrarPacienteService(pacientes, prontuarios, cifrador,
             transacao, relogio);
-    final RegistrarQueixaService registrarQueixa = new RegistrarQueixaService(prontuarios, catalogo, classificadorIA,
-            new ClassificadorPorPalavraChave(), new DetectorSinaisAlarme(), configuracaoConversa, transacao, relogio);
+    final RegistrarQueixaService registrarQueixa = new RegistrarQueixaService(prontuarios,
+            new ClassificadorQueixaEmCadeia(catalogo, List.of(
+                    new ClassificacaoPorIA(classificadorIA, configuracaoConversa.confiancaMinima()),
+                    new ClassificacaoPorPalavraChave(new ClassificadorPorPalavraChave())), new DetectorSinaisAlarme()),
+            transacao, relogio);
     final AgendarConsultaService agendar = new AgendarConsultaService(consultas, bloqueios, prontuarios, publicador,
             configuracaoAgenda, transacao, relogio);
     final NotificarConsultorioService notificar = new NotificarConsultorioService(
-            List.of(canalWhatsApp, canalEmail), consultas, pacientes, prontuarios);
+            new NotificacaoMultiCanal(List.of(canalWhatsApp, canalEmail)), consultas, pacientes, prontuarios);
     final TranscreverAudioService transcrever = new TranscreverAudioService(new MidiaFake(), transcritor);
     final ConduzirConversaService conduzir = new ConduzirConversaService(mensagens, conversas, transcrever, notificar,
-            new ProcessadorComandosConversa(identificar, cadastrar, registrarQueixa, agendar,
-                    new InterpretadorDataHoraDeterministico(), interpretadorIA, configuracaoConversa, relogio),
-            new RespondedorPaciente(enviador, mensagens, textos, relogio), configuracaoConversa, relogio);
+            new ProcessadorComandosPorTipo(List.of(
+                    new IdentificarPacienteExecutor(identificar),
+                    new CadastrarPacienteExecutor(cadastrar),
+                    new RegistrarQueixaExecutor(registrarQueixa),
+                    new InterpretarDataHoraExecutor(new InterpretacaoEmCadeia(List.of(
+                            new InterpretacaoDeterministica(new InterpretadorDataHoraDeterministico(), relogio),
+                            new InterpretacaoPorIA(interpretadorIA, relogio))), agendar, configuracaoConversa),
+                    new BuscarPrimeiroHorarioLivreExecutor(agendar, configuracaoConversa),
+                    new ReservarHorarioExecutor(agendar, configuracaoConversa))),
+            new RespondedorPacienteWhatsApp(enviador, mensagens, textos, relogio), configuracaoConversa, relogio);
     final MontadorVisoes visoes = new MontadorVisoes(pacientes, prontuarios, relogio);
 
     private int sequenciaMensagens;

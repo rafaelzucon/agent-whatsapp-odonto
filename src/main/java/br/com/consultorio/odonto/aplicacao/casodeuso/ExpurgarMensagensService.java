@@ -2,10 +2,10 @@ package br.com.consultorio.odonto.aplicacao.casodeuso;
 
 import br.com.consultorio.odonto.aplicacao.config.ConfiguracaoRetencao;
 import br.com.consultorio.odonto.aplicacao.porta.entrada.ExpurgarMensagensUseCase;
-import br.com.consultorio.odonto.aplicacao.porta.saida.ConversaRepositorio;
 import br.com.consultorio.odonto.aplicacao.porta.saida.ExecutorTransacional;
-import br.com.consultorio.odonto.aplicacao.porta.saida.MensagemRepositorio;
 import br.com.consultorio.odonto.aplicacao.porta.saida.Relogio;
+import br.com.consultorio.odonto.aplicacao.porta.saida.RetencaoConversas;
+import br.com.consultorio.odonto.aplicacao.porta.saida.RetencaoMensagens;
 import br.com.consultorio.odonto.dominio.modelo.EtapaConversa;
 
 import java.time.Duration;
@@ -23,13 +23,13 @@ public final class ExpurgarMensagensService implements ExpurgarMensagensUseCase 
     static final Set<EtapaConversa> ENCERRADAS = EnumSet.of(EtapaConversa.CONCLUIDA,
             EtapaConversa.ENCERRADA_SEM_CONSENTIMENTO, EtapaConversa.ENCAMINHADA_ATENDIMENTO_HUMANO);
 
-    private final MensagemRepositorio mensagens;
-    private final ConversaRepositorio conversas;
+    private final RetencaoMensagens mensagens;
+    private final RetencaoConversas conversas;
     private final ConfiguracaoRetencao retencao;
     private final ExecutorTransacional transacao;
     private final Relogio relogio;
 
-    public ExpurgarMensagensService(MensagemRepositorio mensagens, ConversaRepositorio conversas,
+    public ExpurgarMensagensService(RetencaoMensagens mensagens, RetencaoConversas conversas,
                                     ConfiguracaoRetencao retencao, ExecutorTransacional transacao, Relogio relogio) {
         this.mensagens = Objects.requireNonNull(mensagens);
         this.conversas = Objects.requireNonNull(conversas);

@@ -36,3 +36,9 @@ stateDiagram-v2
         (NAO_ENTENDI + dica da etapa).
         O agente fica em silêncio até expirar.
     end note
+
+    note left of AGUARDANDO_RG
+        Cada etapa não final tem o seu
+        TratadorEtapa (padrão State),
+        registrado no FluxoConversa.
+    end note

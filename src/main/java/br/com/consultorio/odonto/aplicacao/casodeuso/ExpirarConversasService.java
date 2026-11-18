@@ -2,8 +2,8 @@ package br.com.consultorio.odonto.aplicacao.casodeuso;
 
 import br.com.consultorio.odonto.aplicacao.config.ConfiguracaoConversa;
 import br.com.consultorio.odonto.aplicacao.porta.entrada.ExpirarConversasUseCase;
-import br.com.consultorio.odonto.aplicacao.porta.saida.ConversaRepositorio;
 import br.com.consultorio.odonto.aplicacao.porta.saida.Relogio;
+import br.com.consultorio.odonto.aplicacao.porta.saida.RetencaoConversas;
 import br.com.consultorio.odonto.dominio.modelo.EtapaConversa;
 
 import java.util.EnumSet;
@@ -19,11 +19,11 @@ public final class ExpirarConversasService implements ExpirarConversasUseCase {
     static final Set<EtapaConversa> EM_ANDAMENTO = EnumSet.complementOf(EnumSet.of(EtapaConversa.CONCLUIDA,
             EtapaConversa.ENCERRADA_SEM_CONSENTIMENTO, EtapaConversa.ENCAMINHADA_ATENDIMENTO_HUMANO));
 
-    private final ConversaRepositorio conversas;
+    private final RetencaoConversas conversas;
     private final ConfiguracaoConversa configuracao;
     private final Relogio relogio;
 
-    public ExpirarConversasService(ConversaRepositorio conversas, ConfiguracaoConversa configuracao, Relogio relogio) {
+    public ExpirarConversasService(RetencaoConversas conversas, ConfiguracaoConversa configuracao, Relogio relogio) {
         this.conversas = Objects.requireNonNull(conversas);
         this.configuracao = Objects.requireNonNull(configuracao);
         this.relogio = Objects.requireNonNull(relogio);

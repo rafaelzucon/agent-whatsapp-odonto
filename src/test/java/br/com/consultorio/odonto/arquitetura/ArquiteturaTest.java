@@ -1,11 +1,15 @@
 package br.com.consultorio.odonto.arquitetura;
 
+import com.tngtech.archunit.base.DescribedPredicate;
+import com.tngtech.archunit.core.domain.JavaClass;
+import com.tngtech.archunit.core.domain.JavaModifier;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.fields;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.library.Architectures.layeredArchitecture;
 import static com.tngtech.archunit.library.GeneralCodingRules.NO_CLASSES_SHOULD_USE_FIELD_INJECTION;
@@ -99,6 +103,25 @@ class ArquiteturaTest {
             .should().dependOnClassesThat().resideInAnyPackage(BASE + ".aplicacao.porta.saida..",
                     BASE + ".aplicacao.casodeuso..", BASE + ".adaptador.saida..")
             .because("assim como os controladores, o adaptador serverless só traduz eventos em casos de uso");
+
+    /** Classe concreta do sistema que implementa uma abstração do próprio sistema (porta, estratégia, canal...). */
+    private static final DescribedPredicate<JavaClass> IMPLEMENTACAO_DE_ABSTRACAO_DO_SISTEMA =
+            new DescribedPredicate<>("uma classe concreta que implementa uma interface do sistema") {
+                @Override
+                public boolean test(JavaClass tipo) {
+                    return !tipo.isInterface() && !tipo.isRecord() && !tipo.isEnum()
+                            && !tipo.getModifiers().contains(JavaModifier.ABSTRACT)
+                            && tipo.getAllRawInterfaces().stream().anyMatch(i -> i.getPackageName().startsWith(BASE));
+                }
+            };
+
+    @ArchTest
+    static final ArchRule dependencias_apontam_para_abstracoes = fields()
+            .that().areDeclaredInClassesThat().resideInAnyPackage(APLICACAO, ADAPTADOR)
+            .and().areNotStatic()
+            .should().notHaveRawType(IMPLEMENTACAO_DE_ABSTRACAO_DO_SISTEMA)
+            .because("inversão de dependência (DIP): casos de uso e adaptadores guardam a interface (porta, "
+                    + "estratégia, canal), nunca a implementação; quem escolhe a implementação é a composição");
 
     @ArchTest
     static final ArchRule sem_injecao_por_campo = NO_CLASSES_SHOULD_USE_FIELD_INJECTION

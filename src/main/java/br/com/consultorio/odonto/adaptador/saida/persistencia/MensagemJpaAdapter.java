@@ -4,6 +4,7 @@ import br.com.consultorio.odonto.adaptador.saida.persistencia.entidade.MensagemE
 import br.com.consultorio.odonto.adaptador.saida.persistencia.jpa.MensagemJpaRepository;
 import br.com.consultorio.odonto.aplicacao.excecao.MensagemDuplicadaException;
 import br.com.consultorio.odonto.aplicacao.porta.saida.MensagemRepositorio;
+import br.com.consultorio.odonto.aplicacao.porta.saida.RetencaoMensagens;
 import br.com.consultorio.odonto.dominio.modelo.Mensagem;
 import br.com.consultorio.odonto.dominio.modelo.WaId;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -16,7 +17,7 @@ import java.util.Optional;
 /** Histórico de mensagens; o {@code wa_message_id} único garante a idempotência do webhook. */
 @Repository
 @Transactional(readOnly = true)
-public class MensagemJpaAdapter implements MensagemRepositorio {
+public class MensagemJpaAdapter implements MensagemRepositorio, RetencaoMensagens {
 
     private final MensagemJpaRepository repositorio;
 

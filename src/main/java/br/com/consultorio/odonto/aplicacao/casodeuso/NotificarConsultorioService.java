@@ -15,31 +15,29 @@ import br.com.consultorio.odonto.dominio.modelo.Prioridade;
 import br.com.consultorio.odonto.dominio.modelo.Prontuario;
 import br.com.consultorio.odonto.dominio.modelo.QueixaRelatada;
 
-import java.lang.System.Logger.Level;
-import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
-import java.util.function.Consumer;
 
 /**
- * Avisa o consultório por todos os canais habilitados (WhatsApp, e-mail, log). A falha de um canal não
- * impede os demais (aberto para novos canais, sem alterar este serviço).
+ * Monta o aviso de agendamento ou o alerta e o entrega ao {@link CanalNotificacaoConsultorio}. Quantos canais
+ * existem e como as falhas são isoladas é responsabilidade do canal recebido (por padrão, o composite
+ * {@link NotificacaoMultiCanal}), não deste serviço (SRP/DIP).
  */
 public final class NotificarConsultorioService implements NotificarConsultorioUseCase {
 
-    private static final System.Logger LOG = System.getLogger(NotificarConsultorioService.class.getName());
     static final String PROBLEMA_NAO_INFORMADO = "Não informado";
 
-    private final List<CanalNotificacaoConsultorio> canais;
+    private final CanalNotificacaoConsultorio canal;
     private final ConsultaRepositorio consultas;
     private final PacienteRepositorio pacientes;
     private final ProntuarioRepositorio prontuarios;
 
-    public NotificarConsultorioService(List<CanalNotificacaoConsultorio> canais, ConsultaRepositorio consultas,
+    public NotificarConsultorioService(CanalNotificacaoConsultorio canal, ConsultaRepositorio consultas,
                                        PacienteRepositorio pacientes, ProntuarioRepositorio prontuarios) {
-        this.canais = List.copyOf(canais);
-        this.consultas = consultas;
-        this.pacientes = pacientes;
-        this.prontuarios = prontuarios;
+        this.canal = Objects.requireNonNull(canal);
+        this.consultas = Objects.requireNonNull(consultas);
+        this.pacientes = Objects.requireNonNull(pacientes);
+        this.prontuarios = Objects.requireNonNull(prontuarios);
     }
 
     @Override
@@ -54,31 +52,11 @@ public final class NotificarConsultorioService implements NotificarConsultorioUs
                 queixa.map(q -> q.problema().nome()).orElse(PROBLEMA_NAO_INFORMADO),
                 queixa.map(QueixaRelatada::prioridade).orElse(Prioridade.ROTINA),
                 prontuario.map(Prontuario::numero).orElse("-"));
-        enviar("agendamento da consulta " + consultaId, canal -> canal.notificarAgendamento(aviso));
+        canal.notificarAgendamento(aviso);
     }
 
     @Override
     public void alertar(AlertaConversa alerta) {
-        AlertaConsultorio aviso = AlertaConsultorio.de(alerta);
-        enviar("alerta " + alerta.tipo(), canal -> canal.notificarAlerta(aviso));
-    }
-
-    private void enviar(String descricao, Consumer<CanalNotificacaoConsultorio> envio) {
-        int enviados = 0;
-        for (CanalNotificacaoConsultorio canal : canais) {
-            if (!canal.habilitado()) {
-                continue;
-            }
-            try {
-                envio.accept(canal);
-                enviados++;
-            } catch (RuntimeException e) {
-                LOG.log(Level.ERROR, "Falha ao notificar o consultório ({0}) pelo canal {1}: {2}",
-                        descricao, canal.nome(), e.getMessage());
-            }
-        }
-        if (enviados == 0) {
-            LOG.log(Level.WARNING, "Nenhum canal conseguiu notificar o consultório sobre {0}.", descricao);
-        }
+        canal.notificarAlerta(AlertaConsultorio.de(alerta));
     }
 }
