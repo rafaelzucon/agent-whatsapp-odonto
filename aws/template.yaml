@@ -1,18 +1,12 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  Agente WhatsApp do consultório odontológico no AWS Lambda: webhook (Function URL) -> SQS FIFO ->
-  conversa (VPC + RDS PostgreSQL 18), manutenção via EventBridge Scheduler, migrações Flyway como passo
-  da implantação e API administrativa opcional. Implante com aws/implantar.sh.
+  Agente WhatsApp do consultório odontológico no AWS Lambda, na configuração de menor custo: webhook
+  (Function URL) -> SQS FIFO -> conversa, DynamoDB sob demanda (sem VPC, NAT ou banco ligado 24h), segredos
+  no Parameter Store, manutenção via EventBridge Scheduler e API administrativa opcional. Implante com
+  aws/implantar.sh.
 
 Parameters:
-  SegredoArn:
-    Type: String
-    AllowedPattern: "arn:aws[a-z-]*:secretsmanager:.+"
-    Description: >
-      ARN do segredo no Secrets Manager (JSON com WHATSAPP_TOKEN_ACESSO, WHATSAPP_SEGREDO_APP,
-      WHATSAPP_TOKEN_VERIFICACAO, ANTHROPIC_API_KEY, OPENAI_API_KEY, CRIPTO_CHAVE_DADOS, CRIPTO_CHAVE_HASH,
-      DB_SENHA e ADMIN_TOKEN). O aws/implantar.sh cria o segredo.
   WhatsAppPhoneNumberId:
     Type: String
     AllowedPattern: "[0-9]+"
@@ -44,56 +38,59 @@ Parameters:
     Default: openai
     AllowedValues: [openai, none]
     Description: "openai = transcreve áudios com o Whisper; none = pede que o paciente escreva."
-  ClasseInstanciaBanco:
-    Type: String
-    Default: db.t4g.micro
-  ArmazenamentoBancoGb:
-    Type: Number
-    Default: 20
-    MinValue: 20
   ConcorrenciaConversa:
     Type: Number
-    Default: 5
+    Default: 2
     MinValue: 2
     MaxValue: 50
     Description: >
-      Máximo de instâncias simultâneas da função de conversa (cada uma abre até 2 conexões ao banco).
+      Máximo de instâncias simultâneas da função de conversa (2 é o mínimo do SQS e basta para um consultório;
+      mensagens do mesmo paciente são sempre processadas em ordem, uma por vez).
   HabilitarApiAdmin:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: Cria a função da API administrativa (/api/admin/**, protegida pelo ADMIN_TOKEN).
+  HabilitarBackupContinuo:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Backup contínuo do DynamoDB (PITR: restauração a qualquer segundo dos últimos 35 dias). Cobrado por GB
+      guardado: centavos por mês para um consultório.
   VersaoImplantacao:
     Type: String
     Default: inicial
     AllowedPattern: "[a-zA-Z0-9]{1,10}"
     Description: >
-      Hash (10 caracteres) do pacote, do template, dos parâmetros e da versão do segredo, calculado pelo
+      Hash (10 caracteres) do pacote, do template, dos parâmetros e dos segredos, calculado pelo
       aws/implantar.sh. Mudar este valor publica novas versões das funções (e novos snapshots do SnapStart).
   DiasRetencaoLogs:
     Type: Number
-    Default: 30
-    AllowedValues: [7, 14, 30, 60, 90, 180, 365]
+    Default: 7
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 180, 365]
 
 Conditions:
   ComApiAdmin: !Equals [!Ref HabilitarApiAdmin, "true"]
+  ComBackupContinuo: !Equals [!Ref HabilitarBackupContinuo, "true"]
 
 Globals:
   Function:
     Runtime: java21
+    # Graviton (arm64): cerca de 20% mais barato por GB-segundo que x86_64.
     Architectures: [arm64]
     CodeUri: ../target/agent-whatsapp-odonto-lambda.zip
-    MemorySize: 2048
+    MemorySize: 1024
     Timeout: 30
     AutoPublishAlias: atual
+    # Sem custo extra no runtime Java: a inicialização do Spring é capturada uma vez por versão publicada.
     SnapStart:
       ApplyOn: PublishedVersions
     Environment:
       Variables:
-        ODONTO_SEGREDO_ID: !Ref SegredoArn
+        ODONTO_PARAMETROS_CAMINHO: !Sub "/${AWS::StackName}/segredos"
+        DYNAMODB_TABELA: !Ref Tabela
         FILA_MENSAGENS_URL: !Ref FilaMensagens
-        DB_URL: !Sub "jdbc:postgresql://${Banco.Endpoint.Address}:${Banco.Endpoint.Port}/odonto?sslmode=require"
-        DB_USUARIO: odonto
         WHATSAPP_PHONE_NUMBER_ID: !Ref WhatsAppPhoneNumberId
         WHATSAPP_NUMERO_CONSULTORIO: !Ref WhatsAppNumeroConsultorio
         WHATSAPP_VERSAO_API: !Ref WhatsAppVersaoApi
@@ -104,154 +101,48 @@ Globals:
         TRANSCRICAO_PROVEDOR: !Ref TranscricaoProvedor
 
 Resources:
-  # ------------------------------------------------------------------ rede
-  # Funções que acessam o banco ficam em sub-redes privadas e saem para a internet (Meta, Anthropic,
-  # OpenAI, Secrets Manager) por um NAT Gateway.
-  Vpc:
-    Type: AWS::EC2::VPC
+  # ------------------------------------------------------------------ dados
+  # Tabela única (single-table design) cobrada por requisição e por GB guardado: sem uso, custo zero.
+  # pk/sk = chave do item; gsi1 = listagens por tipo em ordem (agenda, retenção); gsi2 = consultas do paciente.
+  # Mantida se a pilha for removida (Retain + proteção contra exclusão).
+  Tabela:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
-      CidrBlock: 10.20.0.0/16
-      EnableDnsHostnames: true
-      EnableDnsSupport: true
-      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-vpc"}]
-
-  InternetGateway:
-    Type: AWS::EC2::InternetGateway
-
-  VpcInternetGateway:
-    Type: AWS::EC2::VPCGatewayAttachment
-    Properties:
-      VpcId: !Ref Vpc
-      InternetGatewayId: !Ref InternetGateway
-
-  SubRedePublicaA:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref Vpc
-      CidrBlock: 10.20.0.0/24
-      AvailabilityZone: !Select [0, !GetAZs ""]
-      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-publica-a"}]
-
-  SubRedePrivadaA:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref Vpc
-      CidrBlock: 10.20.10.0/24
-      AvailabilityZone: !Select [0, !GetAZs ""]
-      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-privada-a"}]
-
-  SubRedePrivadaB:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref Vpc
-      CidrBlock: 10.20.11.0/24
-      AvailabilityZone: !Select [1, !GetAZs ""]
-      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-privada-b"}]
-
-  TabelaRotasPublica:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref Vpc
-
-  RotaPublicaInternet:
-    Type: AWS::EC2::Route
-    DependsOn: VpcInternetGateway
-    Properties:
-      RouteTableId: !Ref TabelaRotasPublica
-      DestinationCidrBlock: 0.0.0.0/0
-      GatewayId: !Ref InternetGateway
-
-  AssociacaoPublicaA:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref SubRedePublicaA
-      RouteTableId: !Ref TabelaRotasPublica
-
-  IpNat:
-    Type: AWS::EC2::EIP
-    DependsOn: VpcInternetGateway
-    Properties:
-      Domain: vpc
-
-  NatGateway:
-    Type: AWS::EC2::NatGateway
-    Properties:
-      AllocationId: !GetAtt IpNat.AllocationId
-      SubnetId: !Ref SubRedePublicaA
-
-  TabelaRotasPrivada:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref Vpc
-
-  RotaPrivadaNat:
-    Type: AWS::EC2::Route
-    Properties:
-      RouteTableId: !Ref TabelaRotasPrivada
-      DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGateway
-
-  AssociacaoPrivadaA:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref SubRedePrivadaA
-      RouteTableId: !Ref TabelaRotasPrivada
-
-  AssociacaoPrivadaB:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref SubRedePrivadaB
-      RouteTableId: !Ref TabelaRotasPrivada
-
-  GrupoSegurancaFuncoes:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Funcoes Lambda do agente (saida liberada, sem entrada)
-      VpcId: !Ref Vpc
-      SecurityGroupEgress:
-        - IpProtocol: "-1"
-          CidrIp: 0.0.0.0/0
-
-  GrupoSegurancaBanco:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: PostgreSQL acessivel apenas pelas funcoes Lambda
-      VpcId: !Ref Vpc
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 5432
-          ToPort: 5432
-          SourceSecurityGroupId: !Ref GrupoSegurancaFuncoes
-
-  # ------------------------------------------------------------------ banco
-  SubRedesBanco:
-    Type: AWS::RDS::DBSubnetGroup
-    Properties:
-      DBSubnetGroupDescription: Sub-redes privadas do PostgreSQL
-      SubnetIds: [!Ref SubRedePrivadaA, !Ref SubRedePrivadaB]
-
-  Banco:
-    Type: AWS::RDS::DBInstance
-    DeletionPolicy: Snapshot
-    UpdateReplacePolicy: Snapshot
-    Properties:
-      Engine: postgres
-      EngineVersion: "18"
-      DBInstanceClass: !Ref ClasseInstanciaBanco
-      AllocatedStorage: !Ref ArmazenamentoBancoGb
-      StorageType: gp3
-      StorageEncrypted: true
-      DBName: odonto
-      MasterUsername: odonto
-      MasterUserPassword: !Sub "{{resolve:secretsmanager:${SegredoArn}:SecretString:DB_SENHA}}"
-      DBSubnetGroupName: !Ref SubRedesBanco
-      VPCSecurityGroups: [!Ref GrupoSegurancaBanco]
-      PubliclyAccessible: false
-      MultiAZ: false
-      BackupRetentionPeriod: 7
-      DeletionProtection: true
-      AutoMinorVersionUpgrade: true
-      CopyTagsToSnapshot: true
+      TableName: !Sub "${AWS::StackName}-dados"
+      BillingMode: PAY_PER_REQUEST
+      TableClass: STANDARD
+      AttributeDefinitions:
+        - {AttributeName: pk, AttributeType: S}
+        - {AttributeName: sk, AttributeType: S}
+        - {AttributeName: gsi1pk, AttributeType: S}
+        - {AttributeName: gsi1sk, AttributeType: S}
+        - {AttributeName: gsi2pk, AttributeType: S}
+        - {AttributeName: gsi2sk, AttributeType: S}
+      KeySchema:
+        - {AttributeName: pk, KeyType: HASH}
+        - {AttributeName: sk, KeyType: RANGE}
+      GlobalSecondaryIndexes:
+        - IndexName: gsi1
+          KeySchema:
+            - {AttributeName: gsi1pk, KeyType: HASH}
+            - {AttributeName: gsi1sk, KeyType: RANGE}
+          Projection: {ProjectionType: ALL}
+        - IndexName: gsi2
+          KeySchema:
+            - {AttributeName: gsi2pk, KeyType: HASH}
+            - {AttributeName: gsi2sk, KeyType: RANGE}
+          Projection: {ProjectionType: ALL}
+      # Cifrada em repouso com a chave própria da AWS (sem custo de KMS); os dados pessoais ainda são cifrados
+      # pela aplicação (AES-GCM) antes de gravar.
+      SSESpecification:
+        SSEEnabled: false
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [ComBackupContinuo, true, false]
+      DeletionProtectionEnabled: true
+      Tags:
+        - {Key: aplicacao, Value: agent-whatsapp-odonto}
 
   # ------------------------------------------------------------------ fila
   # FIFO com grupo = número do paciente: mensagens do mesmo paciente são processadas em ordem, uma por vez.
@@ -295,12 +186,6 @@ Resources:
       LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-manutencao"
       RetentionInDays: !Ref DiasRetencaoLogs
 
-  LogsMigracao:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-migracao"
-      RetentionInDays: !Ref DiasRetencaoLogs
-
   LogsAdmin:
     Type: AWS::Logs::LogGroup
     Condition: ComApiAdmin
@@ -308,12 +193,28 @@ Resources:
       LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-admin"
       RetentionInDays: !Ref DiasRetencaoLogs
 
+  # ------------------------------------------------------------------ permissões
+  # Leitura dos segredos (SecureString com a chave gerenciada aws/ssm, que dispensa kms:Decrypt na política).
+  PoliticaLerSegredos:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Leitura dos parametros de segredos do agente
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [ssm:GetParametersByPath, ssm:GetParameters, ssm:GetParameter]
+            Resource:
+              - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/segredos"
+              - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/segredos/*"
+
   # ------------------------------------------------------------------ funções
-  # Com o SnapStart a configuração e os segredos ficam congelados no snapshot de cada versão publicada.
-  # AutoPublishCodeSha256 recebe a VersaoImplantacao (hash de pacote + template + parâmetros + versão do
-  # segredo, calculado pelo aws/implantar.sh): qualquer mudança publica novas versões e snapshots.
-  # Recebe o webhook da Meta: valida a assinatura, enfileira e responde 200 em milissegundos.
-  # Fora da VPC: não acessa o banco e não depende do NAT.
+  # Fora de VPC: acessam DynamoDB, SQS, SSM e as APIs externas (Meta, Anthropic, OpenAI) direto pela internet,
+  # sem NAT Gateway. Com o SnapStart a configuração e os segredos ficam congelados no snapshot de cada versão:
+  # AutoPublishCodeSha256 recebe a VersaoImplantacao (hash de pacote + template + parâmetros + segredos, calculado
+  # pelo aws/implantar.sh), então qualquer mudança publica novas versões e snapshots.
+
+  # Recebe o webhook da Meta: valida a assinatura, enfileira e responde 200 em milissegundos (sem Spring).
   WebhookFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -321,24 +222,22 @@ Resources:
       Description: Webhook da WhatsApp Cloud API (valida assinatura e enfileira no SQS FIFO)
       Handler: br.com.consultorio.odonto.infraestrutura.lambda.WebhookHandler::handleRequest
       AutoPublishCodeSha256: !Ref VersaoImplantacao
-      MemorySize: 1024
+      MemorySize: 512
       Timeout: 10
       LoggingConfig:
         LogGroup: !Ref LogsWebhook
       FunctionUrlConfig:
         AuthType: NONE
       Policies:
+        - !Ref PoliticaLerSegredos
         - SQSSendMessagePolicy:
             QueueName: !GetAtt FilaMensagens.QueueName
-        - AWSSecretsManagerGetSecretValuePolicy:
-            SecretArn: !Ref SegredoArn
 
-  # Conduz a conversa: consome a fila FIFO, acessa o banco, chama a IA e responde pelo WhatsApp.
+  # Conduz a conversa: consome a fila FIFO, grava no DynamoDB, chama a IA e responde pelo WhatsApp.
   # A concorrência é limitada pelo ScalingConfig do SQS (sem concorrência reservada, que falha em
   # contas novas com cota de 10 execuções simultâneas).
   ConversaFunction:
     Type: AWS::Serverless::Function
-    DependsOn: MigracaoBanco
     Properties:
       FunctionName: !Sub "${AWS::StackName}-conversa"
       Description: Máquina de estados da conversa (consumidor da fila FIFO)
@@ -347,12 +246,10 @@ Resources:
       Timeout: 60
       LoggingConfig:
         LogGroup: !Ref LogsConversa
-      VpcConfig:
-        SubnetIds: [!Ref SubRedePrivadaA, !Ref SubRedePrivadaB]
-        SecurityGroupIds: [!Ref GrupoSegurancaFuncoes]
       Policies:
-        - AWSSecretsManagerGetSecretValuePolicy:
-            SecretArn: !Ref SegredoArn
+        - !Ref PoliticaLerSegredos
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Tabela
       Events:
         Mensagens:
           Type: SQS
@@ -363,10 +260,9 @@ Resources:
             ScalingConfig:
               MaximumConcurrency: !Ref ConcorrenciaConversa
 
-  # Substitui os @Scheduled do modo servidor (EventBridge Scheduler).
+  # Substitui os @Scheduled do modo servidor (EventBridge Scheduler: 14 milhões de execuções/mês grátis).
   ManutencaoFunction:
     Type: AWS::Serverless::Function
-    DependsOn: MigracaoBanco
     Properties:
       FunctionName: !Sub "${AWS::StackName}-manutencao"
       Description: Expira conversas abandonadas e expurga o histórico (LGPD)
@@ -375,17 +271,16 @@ Resources:
       Timeout: 120
       LoggingConfig:
         LogGroup: !Ref LogsManutencao
-      VpcConfig:
-        SubnetIds: [!Ref SubRedePrivadaA, !Ref SubRedePrivadaB]
-        SecurityGroupIds: [!Ref GrupoSegurancaFuncoes]
       Policies:
-        - AWSSecretsManagerGetSecretValuePolicy:
-            SecretArn: !Ref SegredoArn
+        - !Ref PoliticaLerSegredos
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Tabela
       Events:
+        # A conversa expira após 2h sem resposta: verificar a cada 15 min basta e reduz as execuções.
         ExpirarConversas:
           Type: ScheduleV2
           Properties:
-            ScheduleExpression: rate(5 minutes)
+            ScheduleExpression: rate(15 minutes)
             Input: '{"tarefa":"expirar-conversas"}'
             RetryPolicy:
               MaximumRetryAttempts: 0
@@ -400,7 +295,6 @@ Resources:
   AdminFunction:
     Type: AWS::Serverless::Function
     Condition: ComApiAdmin
-    DependsOn: MigracaoBanco
     Properties:
       FunctionName: !Sub "${AWS::StackName}-admin"
       Description: API administrativa /api/admin/** (Spring MVC no aws-serverless-java-container)
@@ -408,45 +302,12 @@ Resources:
       AutoPublishCodeSha256: !Ref VersaoImplantacao
       LoggingConfig:
         LogGroup: !Ref LogsAdmin
-      VpcConfig:
-        SubnetIds: [!Ref SubRedePrivadaA, !Ref SubRedePrivadaB]
-        SecurityGroupIds: [!Ref GrupoSegurancaFuncoes]
       FunctionUrlConfig:
         AuthType: NONE
       Policies:
-        - AWSSecretsManagerGetSecretValuePolicy:
-            SecretArn: !Ref SegredoArn
-
-  # Aplica as migrações Flyway antes das funções que usam o banco (recurso personalizado).
-  MigracaoFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub "${AWS::StackName}-migracao"
-      Description: Migrações Flyway do banco (executadas a cada novo código publicado)
-      Handler: br.com.consultorio.odonto.infraestrutura.lambda.MigracaoHandler::handleRequest
-      AutoPublishCodeSha256: !Ref VersaoImplantacao
-      MemorySize: 1024
-      Timeout: 300
-      SnapStart:
-        ApplyOn: None
-      LoggingConfig:
-        LogGroup: !Ref LogsMigracao
-      VpcConfig:
-        SubnetIds: [!Ref SubRedePrivadaA, !Ref SubRedePrivadaB]
-        SecurityGroupIds: [!Ref GrupoSegurancaFuncoes]
-      Policies:
-        - AWSSecretsManagerGetSecretValuePolicy:
-            SecretArn: !Ref SegredoArn
-
-  MigracaoBanco:
-    Type: AWS::CloudFormation::CustomResource
-    # A resposta ao CloudFormation sai pelo NAT: a rota precisa existir na criação e só pode ser
-    # removida depois deste recurso (senão a exclusão da pilha fica presa esperando a resposta).
-    DependsOn: [RotaPrivadaNat, AssociacaoPrivadaA, AssociacaoPrivadaB]
-    Properties:
-      ServiceToken: !Ref MigracaoFunction.Alias
-      # Muda a cada novo código publicado, o que dispara a migração de novo.
-      CodigoVersao: !Ref MigracaoFunction.Version
+        - !Ref PoliticaLerSegredos
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Tabela
 
 Outputs:
   UrlWebhook:
@@ -456,10 +317,14 @@ Outputs:
     Condition: ComApiAdmin
     Description: "Base da API administrativa (ex.: GET {url}api/admin/agenda?inicio=2026-12-01)"
     Value: !GetAtt AdminFunctionUrl.FunctionUrl
+  TabelaDynamoDb:
+    Description: Tabela com os dados do consultório (mantida se a pilha for removida)
+    Value: !Ref Tabela
+  CaminhoSegredos:
+    Description: Caminho dos segredos no Parameter Store
+    Value: !Sub "/${AWS::StackName}/segredos"
   FilaMensagens:
     Value: !Ref FilaMensagens
   FilaMensagensFalhas:
     Description: Mensagens que falharam 5 vezes (verifique os logs da função de conversa)
     Value: !Ref FilaMensagensFalhas
-  EnderecoBanco:
-    Value: !GetAtt Banco.Endpoint.Address

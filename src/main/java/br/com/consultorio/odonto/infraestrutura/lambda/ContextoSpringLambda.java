@@ -30,7 +30,7 @@ public final class ContextoSpringLambda {
         return contexto;
     }
 
-    /** Carrega os segredos do Secrets Manager como propriedades de sistema (idempotente). */
+    /** Carrega os segredos do Parameter Store como propriedades de sistema (idempotente). */
     public static synchronized void prepararAmbiente() {
         if (System.getProperty("odonto.lambda.segredos-carregados") == null) {
             SegredosAws.publicarComoPropriedadesDoSistema(SegredosAws.ler());

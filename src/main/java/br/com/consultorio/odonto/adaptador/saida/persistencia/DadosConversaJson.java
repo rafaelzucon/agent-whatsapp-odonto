@@ -13,7 +13,7 @@ import java.util.Optional;
  * Representação JSON (antes da cifragem) dos {@link DadosConversa}. Campos simples e anuláveis, para que o
  * domínio não precise conhecer Jackson.
  */
-record DadosConversaJson(
+public record DadosConversaJson(
         String rgNumero,
         String rgUf,
         String nome,
@@ -29,7 +29,7 @@ record DadosConversaJson(
         String horarioSugeridoInicio,
         String horarioSugeridoFim) {
 
-    static DadosConversaJson de(DadosConversa d) {
+    public static DadosConversaJson de(DadosConversa d) {
         return new DadosConversaJson(
                 d.rg().map(DocumentoRg::numero).orElse(null),
                 d.rg().map(rg -> rg.uf().name()).orElse(null),
@@ -47,7 +47,7 @@ record DadosConversaJson(
                 d.horarioSugerido().map(h -> h.fim().toString()).orElse(null));
     }
 
-    DadosConversa paraDominio() {
+    public DadosConversa paraDominio() {
         Optional<Horario> horario = horarioSugeridoInicio == null || horarioSugeridoFim == null
                 ? Optional.empty()
                 : Optional.of(new Horario(LocalDateTime.parse(horarioSugeridoInicio),

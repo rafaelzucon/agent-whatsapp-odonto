@@ -128,7 +128,7 @@ flowchart LR
     end
 
     subgraph saida["Adaptadores de saída"]
-        jpa["*JpaAdapter<br/>(PostgreSQL, AES-GCM, HMAC)"]
+        jpa["*JpaAdapter (PostgreSQL) ou<br/>*DynamoDbAdapter (Lambda)<br/>AES-GCM, HMAC"]
         wa["WhatsAppCloudApiAdapter"]
         ia["ClassificadorProblemaClaudeAdapter<br/>InterpretadorDataHoraClaudeAdapter"]
         wsp["WhisperTranscritorAdapter"]
@@ -471,6 +471,22 @@ classDiagram
 
 Tabelas criadas pelo Flyway (`V1__esquema_inicial.sql`). Colunas `*_cifrado` usam AES-256-GCM; `rg_hash` é HMAC-SHA256.
 
+No modo Lambda, os mesmos dados ficam em **uma tabela DynamoDB** (`<pilha>-dados`, design de tabela única), gravada pelos `*DynamoDbAdapter` com a mesma criptografia. Os campos cifrados e o hash do RG são idênticos aos do PostgreSQL:
+
+| Item | `pk` | `sk` | Índices |
+|---|---|---|---|
+| Paciente | `PACIENTE#<id>` | `PACIENTE` | `gsi1`: `PACIENTE`, por id |
+| Prontuário (queixas embutidas) | `PACIENTE#<id>` | `PRONTUARIO` | — |
+| Índice da queixa | `QUEIXA#<id>` | `QUEIXA` | — (aponta para o paciente) |
+| Consulta | `CONSULTA#<id>` | `CONSULTA` | `gsi1`: `CONSULTA`, por início; `gsi2`: `CONSULTA#PACIENTE#<id>`, por início |
+| Bloqueio de agenda | `BLOQUEIO#<id>` | `BLOQUEIO` | `gsi1`: `BLOQUEIO`, por início |
+| Conversa | `CONVERSA#<waId>` | `CONVERSA` | `gsi1`: `CONVERSA`, por última interação |
+| Mensagem | `MENSAGEM#<id>` | `MENSAGEM` | `gsi1`: `MENSAGEM`, por data |
+| Travas de unicidade | `RG#<hash>`, `HORARIO#<início>`, `WAMSG#<id da Meta>` | `RG`, `HORARIO`, `WAMSG` | — |
+| Contadores (ids sequenciais) | `CONTADOR#<nome>` | `CONTADOR` | — |
+
+As travas substituem os índices únicos do PostgreSQL: são gravadas com condição na mesma transação (`TransactWriteItems`) do item que protegem, então RG repetido, horário já ocupado e mensagem reenviada pela Meta são recusados atomicamente. O catálogo de problemas é lido do próprio `V2__catalogo_problemas.sql` empacotado (`CatalogoProblemasClasspathAdapter`), sem tabela.
+
 Fonte: [`fonte/09-modelo-dados.mmd`](fonte/09-modelo-dados.mmd)
 
 ```mermaid
@@ -595,7 +611,7 @@ flowchart TB
 
 ## 11. Implantação na AWS Lambda
 
-Modo alternativo ao Docker: o webhook responde rápido e só enfileira; a conversa é processada por outra função, consumindo uma fila SQS FIFO agrupada pelo número do paciente (ordem garantida por conversa). Banco no RDS em sub-redes privadas; saída para a Meta e as IAs pelo NAT Gateway. Detalhes no [README](../../README.md#implantação-na-aws-lambda).
+Modo alternativo ao Docker, na configuração de menor custo: o webhook responde rápido e só enfileira; a conversa é processada por outra função, consumindo uma fila SQS FIFO agrupada pelo número do paciente (ordem garantida por conversa). Os dados ficam no DynamoDB sob demanda e os segredos no Parameter Store. Sem VPC, NAT Gateway ou banco ligado 24h: as funções acessam a AWS e as APIs externas direto pela internet, e o custo sem uso é praticamente zero. Detalhes no [README](../../README.md#implantação-na-aws-lambda).
 
 Fonte: [`fonte/11-implantacao-aws-lambda.mmd`](fonte/11-implantacao-aws-lambda.mmd)
 
@@ -606,24 +622,17 @@ flowchart LR
     equipe(["🦷 Equipe<br/>(API admin)"])
     ia["Anthropic Claude<br/>OpenAI Whisper"]
 
-    subgraph aws["AWS (pilha SAM: aws/template.yaml)"]
+    subgraph aws["AWS (pilha SAM: aws/template.yaml) · sem VPC, sem NAT, sem servidor ligado"]
         direction LR
-        webhook["λ webhook<br/>Function URL pública<br/>valida HMAC, enfileira"]
+        webhook["λ webhook (512 MB)<br/>Function URL pública<br/>valida HMAC, enfileira"]
         fila[["SQS FIFO mensagens<br/>grupo = número do paciente<br/>dedupe = id da mensagem"]]
         dlq[["SQS FIFO falhas<br/>(DLQ, 5 tentativas)"]]
-        segredo[/"Secrets Manager<br/>tokens, chaves, DB_SENHA"/]
-        agenda["EventBridge Scheduler<br/>5 min: expirar conversas<br/>03:30: expurgar mensagens"]
-
-        subgraph vpc["VPC 10.20.0.0/16"]
-            subgraph privada["Sub-redes privadas (2 AZs)"]
-                conversa["λ conversa<br/>máquina de estados"]
-                manutencao["λ manutencao"]
-                admin["λ admin<br/>Function URL (opcional)"]
-                migracao["λ migracao<br/>Flyway (custom resource)"]
-                rds[("RDS PostgreSQL 18<br/>cifrado, backup 7 dias")]
-            end
-            nat["NAT Gateway<br/>(sub-rede pública)"]
-        end
+        segredo[/"SSM Parameter Store<br/>/pilha/segredos/*<br/>SecureString (aws/ssm)"/]
+        agenda["EventBridge Scheduler<br/>15 min: expirar conversas<br/>03:30: expurgar mensagens"]
+        conversa["λ conversa (1 GB)<br/>máquina de estados<br/>até 2 em paralelo"]
+        manutencao["λ manutencao"]
+        admin["λ admin<br/>Function URL (opcional)"]
+        tabela[("DynamoDB sob demanda<br/>tabela única pilha-dados<br/>PITR 35 dias · proteção contra exclusão")]
     end
 
     paciente <--> meta
@@ -632,14 +641,12 @@ flowchart LR
     fila -->|"lotes de até 10"| conversa
     fila -.->|"após 5 falhas"| dlq
     agenda --> manutencao
-    conversa --> rds
-    manutencao --> rds
-    admin --> rds
-    migracao -->|"no deploy"| rds
+    conversa --> tabela
+    manutencao --> tabela
+    admin --> tabela
     equipe -->|"Bearer ADMIN_TOKEN"| admin
-    conversa --> nat
-    nat -->|"respostas e avisos"| meta
-    nat --> ia
+    conversa -->|"respostas e avisos (internet direta)"| meta
+    conversa --> ia
     segredo -.->|"lido na inicialização<br/>(fica no snapshot SnapStart)"| conversa
     segredo -.-> webhook
 ```

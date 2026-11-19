@@ -22,6 +22,7 @@ import java.util.stream.Collectors;
 
 /** Prontuários e queixas. Queixas novas são inseridas; as existentes só têm classificação e consulta atualizadas. */
 @Repository
+@PersistenciaJpa
 @Transactional(readOnly = true)
 public class ProntuarioJpaAdapter implements ProntuarioRepositorio {
 

@@ -92,10 +92,12 @@ class ArquiteturaTest {
 
     @ArchTest
     static final ArchRule aws_fica_na_infraestrutura_do_lambda = noClasses()
-            .that().resideOutsideOfPackage(BASE + ".infraestrutura.lambda..")
+            .that().resideOutsideOfPackages(BASE + ".infraestrutura.lambda..",
+                    BASE + ".adaptador.saida.persistencia.dynamodb..")
             .should().dependOnClassesThat().resideInAnyPackage("com.amazonaws..", "software.amazon..", "org.crac..")
-            .because("o AWS Lambda é só uma forma de implantação: os adaptadores do modo serverless "
-                    + "(adaptador.entrada.lambda) não conhecem a AWS e o resto do sistema nem sabe que ela existe");
+            .because("o AWS Lambda é só uma forma de implantação e o DynamoDB só mais um adaptador de persistência: "
+                    + "os adaptadores do modo serverless (adaptador.entrada.lambda) não conhecem a AWS e o resto do "
+                    + "sistema nem sabe que ela existe");
 
     @ArchTest
     static final ArchRule adaptador_lambda_usa_apenas_portas_de_entrada = noClasses()

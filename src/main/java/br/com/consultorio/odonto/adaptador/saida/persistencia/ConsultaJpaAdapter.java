@@ -21,6 +21,7 @@ import java.util.Optional;
  * AGENDADAS no mesmo horário mesmo com pedidos simultâneos; a violação vira {@link HorarioIndisponivelException}.
  */
 @Repository
+@PersistenciaJpa
 @Transactional(readOnly = true)
 public class ConsultaJpaAdapter implements ConsultaRepositorio {
 

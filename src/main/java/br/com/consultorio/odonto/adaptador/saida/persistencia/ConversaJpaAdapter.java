@@ -17,6 +17,7 @@ import java.util.Set;
 
 /** Estado das conversas. Os dados coletados (RG, nome, nascimento...) são serializados em JSON e cifrados. */
 @Repository
+@PersistenciaJpa
 @Transactional(readOnly = true)
 public class ConversaJpaAdapter implements ConversaRepositorio, RetencaoConversas {
 

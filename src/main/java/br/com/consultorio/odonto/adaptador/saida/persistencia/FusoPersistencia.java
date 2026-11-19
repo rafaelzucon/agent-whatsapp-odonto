@@ -6,21 +6,21 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.time.LocalDateTime;
 
-/** Converte os horários locais do consultório (domínio) para instantes (timestamptz no banco) e vice-versa. */
+/** Converte os horários locais do consultório (domínio) para instantes (timestamptz no PostgreSQL, texto ISO-8601 no DynamoDB) e vice-versa. */
 @Component
-class FusoPersistencia {
+public class FusoPersistencia {
 
     private final Relogio relogio;
 
-    FusoPersistencia(Relogio relogio) {
+    public FusoPersistencia(Relogio relogio) {
         this.relogio = relogio;
     }
 
-    Instant paraInstante(LocalDateTime local) {
+    public Instant paraInstante(LocalDateTime local) {
         return local.atZone(relogio.fuso()).toInstant();
     }
 
-    LocalDateTime paraLocal(Instant instante) {
+    public LocalDateTime paraLocal(Instant instante) {
         return LocalDateTime.ofInstant(instante, relogio.fuso());
     }
 }

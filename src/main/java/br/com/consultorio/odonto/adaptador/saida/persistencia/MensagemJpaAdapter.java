@@ -16,6 +16,7 @@ import java.util.Optional;
 
 /** Histórico de mensagens; o {@code wa_message_id} único garante a idempotência do webhook. */
 @Repository
+@PersistenciaJpa
 @Transactional(readOnly = true)
 public class MensagemJpaAdapter implements MensagemRepositorio, RetencaoMensagens {
 

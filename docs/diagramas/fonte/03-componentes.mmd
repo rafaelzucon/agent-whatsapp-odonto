@@ -20,7 +20,7 @@ flowchart LR
     end
 
     subgraph saida["Adaptadores de saída"]
-        jpa["*JpaAdapter<br/>(PostgreSQL, AES-GCM, HMAC)"]
+        jpa["*JpaAdapter (PostgreSQL) ou<br/>*DynamoDbAdapter (Lambda)<br/>AES-GCM, HMAC"]
         wa["WhatsAppCloudApiAdapter"]
         ia["ClassificadorProblemaClaudeAdapter<br/>InterpretadorDataHoraClaudeAdapter"]
         wsp["WhisperTranscritorAdapter"]

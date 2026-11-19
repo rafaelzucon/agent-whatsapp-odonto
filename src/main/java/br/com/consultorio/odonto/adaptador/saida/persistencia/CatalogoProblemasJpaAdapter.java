@@ -13,6 +13,7 @@ import java.util.Optional;
 
 /** Catálogo de problemas odontológicos (somente leitura; mantido por migrações SQL). */
 @Repository
+@PersistenciaJpa
 @Transactional(readOnly = true)
 public class CatalogoProblemasJpaAdapter implements CatalogoProblemasRepositorio {
 

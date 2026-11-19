@@ -17,6 +17,7 @@ import java.util.stream.Collectors;
 
 /** Pacientes com dados pessoais cifrados; o RG é localizado pelo HMAC. */
 @Repository
+@PersistenciaJpa
 @Transactional(readOnly = true)
 public class PacienteJpaAdapter implements PacienteRepositorio {
 

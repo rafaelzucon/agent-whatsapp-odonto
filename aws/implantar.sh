@@ -9,7 +9,7 @@ TEMPLATE="aws/template.yaml"
 PARAMETROS="aws/parametros.env"
 SEGREDOS="aws/segredos.json"
 PACOTE="target/agent-whatsapp-odonto-lambda.zip"
-FUNCOES="webhook conversa manutencao admin migracao"
+FUNCOES="webhook conversa manutencao admin"
 
 vermelho() { printf '\033[31m%s\033[0m\n' "$*"; }
 verde() { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -24,7 +24,7 @@ parametro() {
 
 pilha() { local p; p=$(parametro PILHA); echo "${p:-agente-odonto}"; }
 regiao() { local r; r=$(parametro REGIAO); echo "${r:-sa-east-1}"; }
-nome_segredo() { local n; n=$(parametro NOME_SEGREDO); echo "${n:-$(pilha)/segredos}"; }
+caminho_segredos() { echo "/$(pilha)/segredos"; }
 aws_() { aws --region "$(regiao)" "$@"; }
 
 exigir() { command -v "$1" >/dev/null 2>&1 || falhar "$1 não encontrado. $2"; }
@@ -55,18 +55,17 @@ cmd_configurar() {
         amarelo "$PARAMETROS já existe; mantido."
     fi
     if [[ ! -f "$SEGREDOS" ]]; then
-        # Senha do RDS só com caracteres aceitos (sem / @ " e espaço).
         python3 - "$SEGREDOS" "$(openssl rand -base64 32)" "$(openssl rand -base64 32)" \
-            "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" "$(openssl rand -hex 16)" <<'PY'
+            "$(openssl rand -hex 24)" "$(openssl rand -hex 16)" <<'PY'
 import json, sys
-arquivo, dados, hash_, senha, admin, verificacao = sys.argv[1:]
+arquivo, dados, hash_, admin, verificacao = sys.argv[1:]
 d = json.load(open("aws/segredos.exemplo.json"))
-d.update({"CRIPTO_CHAVE_DADOS": dados, "CRIPTO_CHAVE_HASH": hash_, "DB_SENHA": senha,
+d.update({"CRIPTO_CHAVE_DADOS": dados, "CRIPTO_CHAVE_HASH": hash_,
           "ADMIN_TOKEN": admin, "WHATSAPP_TOKEN_VERIFICACAO": verificacao})
 json.dump(d, open(arquivo, "w"), indent=2)
 PY
         chmod 600 "$SEGREDOS"
-        verde "Criado $SEGREDOS com chaves de criptografia, senha do banco e tokens gerados."
+        verde "Criado $SEGREDOS com chaves de criptografia e tokens gerados."
         amarelo "Guarde uma cópia segura das chaves CRIPTO_*: sem elas os dados cifrados não podem ser lidos."
     else
         amarelo "$SEGREDOS já existe; mantido."
@@ -91,39 +90,44 @@ cmd_construir() {
     verde "Pacote $PACOTE pronto ($((tamanho / 1048576)) MB descompactado)."
 }
 
-# Cria ou atualiza o segredo e imprime o ARN e o VersionId atual.
-publicar_segredo() {
-    local nome arn atual
-    nome=$(nome_segredo)
-    if arn=$(aws_ secretsmanager describe-secret --secret-id "$nome" --query ARN --output text 2>/dev/null); then
-        atual=$(aws_ secretsmanager get-secret-value --secret-id "$nome" --query SecretString --output text)
-        if ! python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]) == json.load(open(sys.argv[2])) else 1)' \
-            "$atual" "$SEGREDOS"; then
-            ajustar_senha_banco "$atual" >&2
-            aws_ secretsmanager put-secret-value --secret-id "$nome" --secret-string "file://$SEGREDOS" >/dev/null
-            amarelo "Segredo $nome atualizado." >&2
-        fi
-    else
-        arn=$(aws_ secretsmanager create-secret --name "$nome" \
-            --description "Segredos do Agente WhatsApp Odonto (pilha $(pilha))" \
-            --secret-string "file://$SEGREDOS" --query ARN --output text)
-        verde "Segredo $nome criado." >&2
-    fi
-    echo "$arn $(aws_ secretsmanager get-secret-value --secret-id "$nome" --query VersionId --output text)"
-}
-
-# O RDS não acompanha mudanças no segredo: se DB_SENHA mudou, troca a senha mestre antes.
-ajustar_senha_banco() {
-    local senha_antiga senha_nova instancia
-    senha_antiga=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("DB_SENHA",""))' "$1")
-    senha_nova=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("DB_SENHA",""))' "$SEGREDOS")
-    [[ "$senha_antiga" == "$senha_nova" ]] && return 0
-    instancia=$(aws_ cloudformation describe-stack-resource --stack-name "$(pilha)" --logical-resource-id Banco \
-        --query StackResourceDetail.PhysicalResourceId --output text 2>/dev/null) || return 0
-    amarelo "DB_SENHA mudou: alterando a senha mestre do RDS $instancia..."
-    aws_ rds modify-db-instance --db-instance-identifier "$instancia" --master-user-password "$senha_nova" \
-        --apply-immediately >/dev/null
-    aws_ rds wait db-instance-available --db-instance-identifier "$instancia"
+# Sincroniza aws/segredos.json com o Parameter Store (/<pilha>/segredos/<CHAVE>, SecureString com a chave
+# gerenciada aws/ssm, sem custo): grava as chaves novas ou alteradas e apaga as removidas ou vazias (o Parameter
+# Store não aceita valor vazio). Os valores passam por arquivos temporários, nunca pela linha de comando.
+publicar_segredos() {
+    local caminho atual temporario f chave
+    caminho=$(caminho_segredos)
+    atual=$(aws_ ssm get-parameters-by-path --path "$caminho" --with-decryption \
+        --query 'Parameters[].[Name,Value]' --output json)
+    temporario=$(mktemp -d)
+    chmod 700 "$temporario"
+    python3 - "$SEGREDOS" "$caminho" "$temporario" "$atual" <<'PY'
+import json, os, sys
+arquivo, caminho, pasta, atual = sys.argv[1:]
+desejado = {k: str(v) for k, v in json.load(open(arquivo)).items() if v is not None and str(v) != ""}
+existente = {nome.rsplit("/", 1)[1]: valor for nome, valor in (json.loads(atual) or [])}
+for chave, valor in desejado.items():
+    if existente.get(chave) != valor:
+        entrada = {"Name": f"{caminho}/{chave}", "Value": valor, "Type": "SecureString", "Overwrite": True,
+                   "Tier": "Standard"}
+        with open(os.open(os.path.join(pasta, f"gravar-{chave}.json"), os.O_WRONLY | os.O_CREAT, 0o600), "w") as f:
+            json.dump(entrada, f)
+for chave in existente.keys() - desejado.keys():
+    open(os.path.join(pasta, f"apagar-{chave}"), "w").close()
+PY
+    for f in "$temporario"/gravar-*.json; do
+        [[ -e "$f" ]] || continue
+        chave=$(basename "$f" .json)
+        chave=${chave#gravar-}
+        aws_ ssm put-parameter --cli-input-json "file://$f" >/dev/null
+        amarelo "Segredo $caminho/$chave gravado."
+    done
+    for f in "$temporario"/apagar-*; do
+        [[ -e "$f" ]] || continue
+        chave=${f##*/apagar-}
+        aws_ ssm delete-parameter --name "$caminho/$chave" >/dev/null
+        amarelo "Segredo $caminho/$chave removido."
+    done
+    rm -rf "$temporario"
 }
 
 parametros_template() {
@@ -132,7 +136,7 @@ parametros_template() {
         [[ "$linha" =~ ^[A-Z][A-Za-z0-9]*= ]] || continue
         chave="${linha%%=*}"
         valor="${linha#*=}"
-        case "$chave" in PILHA | REGIAO | NOME_SEGREDO) continue ;; esac
+        case "$chave" in PILHA | REGIAO) continue ;; esac
         valor="${valor//\\/\\\\}"
         printf '%s="%s"\n' "$chave" "${valor//\"/\\\"}"
     done <"$PARAMETROS"
@@ -142,14 +146,12 @@ cmd_implantar() {
     exigir_configuracao
     exigir_ferramentas
     [[ -f "$PACOTE" && "${1:-}" != "--construir" ]] || cmd_construir
-    local segredo arn versao_segredo versao
-    segredo=$(publicar_segredo)
-    arn=${segredo% *}
-    versao_segredo=${segredo#* }
-    # Hash de tudo que entra no snapshot do SnapStart: código, template, parâmetros e versão do segredo.
-    versao=$( { sha256sum "$PACOTE" "$TEMPLATE" "$PARAMETROS"; echo "$versao_segredo"; } | sha256sum | cut -c1-10)
+    publicar_segredos
+    local versao
+    # Hash de tudo que entra no snapshot do SnapStart: código, template, parâmetros e segredos.
+    versao=$(sha256sum "$PACOTE" "$TEMPLATE" "$PARAMETROS" "$SEGREDOS" | sha256sum | cut -c1-10)
 
-    local overrides=("SegredoArn=$arn" "VersaoImplantacao=$versao")
+    local overrides=("VersaoImplantacao=$versao")
     while IFS= read -r p; do overrides+=("$p"); done < <(parametros_template)
 
     verde "Implantando a pilha $(pilha) em $(regiao) (versão $versao)..."
@@ -192,40 +194,42 @@ cmd_falhas() {
         --query 'Attributes.ApproximateNumberOfMessages' --output text | xargs printf 'Mensagens na fila de falhas: %s\n'
 }
 
-cmd_migrar() {
-    local saida=/tmp/odonto-migracao-$$.json
-    aws_ lambda invoke --function-name "$(pilha)-migracao:atual" --cli-read-timeout 310 "$saida" >/dev/null
-    cat "$saida"; echo; rm -f "$saida"
+cmd_backup() {
+    local nome
+    nome="$(pilha)-dados-$(date +%Y%m%d-%H%M%S)"
+    aws_ dynamodb create-backup --table-name "$(pilha)-dados" --backup-name "$nome" \
+        --query 'BackupDetails.[BackupName,BackupStatus]' --output text
 }
 
 cmd_remover() {
-    amarelo "Isto remove todas as funções, a fila, a rede e o banco da pilha $(pilha) (fica um snapshot final do RDS)."
+    amarelo "Isto remove as funções, as filas, os agendamentos e os logs da pilha $(pilha)."
+    amarelo "A tabela DynamoDB (dados dos pacientes) e os segredos do Parameter Store são MANTIDOS."
     read -r -p "Digite o nome da pilha para confirmar: " confirmacao
     [[ "$confirmacao" == "$(pilha)" ]] || falhar "Confirmação incorreta; nada foi removido."
-    local instancia
-    if instancia=$(aws_ cloudformation describe-stack-resource --stack-name "$(pilha)" --logical-resource-id Banco \
-        --query StackResourceDetail.PhysicalResourceId --output text 2>/dev/null); then
-        aws_ rds modify-db-instance --db-instance-identifier "$instancia" --no-deletion-protection \
-            --apply-immediately >/dev/null
-    fi
     sam delete --stack-name "$(pilha)" --region "$(regiao)" --no-prompts
-    amarelo "O segredo $(nome_segredo) foi mantido. Para apagá-lo: aws secretsmanager delete-secret --secret-id $(nome_segredo)"
+    echo
+    echo "Para apagar também os dados (irreversível; rode antes ./aws/implantar.sh backup, se precisar):"
+    echo "  aws --region $(regiao) dynamodb update-table --table-name $(pilha)-dados --no-deletion-protection-enabled"
+    echo "  aws --region $(regiao) dynamodb delete-table --table-name $(pilha)-dados"
+    echo "Para apagar os segredos:"
+    echo "  aws --region $(regiao) ssm get-parameters-by-path --path $(caminho_segredos) --query 'Parameters[].Name' --output text \\"
+    echo "    | xargs -n 10 aws --region $(regiao) ssm delete-parameters --names"
 }
 
 cmd_ajuda() {
     cat <<'AJUDA'
 Uso: ./aws/implantar.sh <comando>
 
-  configurar           cria aws/parametros.env e aws/segredos.json (chaves e senhas geradas)
+  configurar           cria aws/parametros.env e aws/segredos.json (chaves e tokens gerados)
   verificar            confere configuração, ferramentas, credenciais e o template
   construir            testa e gera target/agent-whatsapp-odonto-lambda.zip (./mvnw -Plambda package)
-  implantar            publica o segredo e implanta a pilha (gera o pacote se não existir)
+  implantar            publica os segredos no Parameter Store e implanta a pilha (gera o pacote se não existir)
   implantar --construir   reconstrói o pacote antes de implantar
-  saidas               mostra a URL do webhook, a URL da API admin e as filas
-  logs [funcao] [desde]   acompanha os logs (webhook|conversa|manutencao|admin|migracao; padrão conversa 1h)
+  saidas               mostra a URL do webhook, a URL da API admin, a tabela e as filas
+  logs [funcao] [desde]   acompanha os logs (webhook|conversa|manutencao|admin; padrão conversa 1h)
   falhas               quantidade de mensagens na fila de falhas (DLQ)
-  migrar               executa as migrações do banco manualmente
-  remover              remove a pilha (o RDS deixa um snapshot final; o segredo é mantido)
+  backup               cria um backup sob demanda da tabela DynamoDB
+  remover              remove a pilha (a tabela DynamoDB e os segredos são mantidos)
 
 Pré-requisitos: AWS CLI v2, AWS SAM CLI, Java 21, Python 3 e openssl.
 AJUDA
@@ -241,7 +245,7 @@ case "$comando" in
     saidas) cmd_saidas ;;
     logs) cmd_logs "$@" ;;
     falhas) cmd_falhas ;;
-    migrar) cmd_migrar ;;
+    backup) cmd_backup ;;
     remover) cmd_remover ;;
     ajuda | -h | --help) cmd_ajuda ;;
     *) vermelho "Comando desconhecido: $comando"; cmd_ajuda; exit 1 ;;

@@ -138,7 +138,26 @@
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
-            <artifactId>secretsmanager</artifactId>
+            <artifactId>ssm</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>netty-nio-client</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>apache-client</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>apache5-client</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <!-- Persistência do modo Lambda (odonto.persistencia=dynamodb): DynamoDB sob demanda, sem servidor de banco -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>dynamodb</artifactId>
             <exclusions>
                 <exclusion>
                     <groupId>software.amazon.awssdk</groupId>
@@ -158,7 +177,7 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>url-connection-client</artifactId>
         </dependency>
-        <!-- Ganchos de checkpoint/restore usados pelo SnapStart (Hikari e ciclo de vida do Spring) -->
+        <!-- Ganchos de checkpoint/restore usados pelo SnapStart (ciclo de vida do Spring) -->
         <dependency>
             <groupId>org.crac</groupId>
             <artifactId>crac</artifactId>
@@ -174,6 +193,17 @@
             <groupId>com.tngtech.archunit</groupId>
             <artifactId>archunit-junit5</artifactId>
             <version>${archunit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- DynamoDB Local em contêiner para os testes dos adaptadores (pulados se não houver Docker) -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

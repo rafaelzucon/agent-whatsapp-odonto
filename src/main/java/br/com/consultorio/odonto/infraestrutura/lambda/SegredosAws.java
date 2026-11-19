@@ -3,9 +3,8 @@ package br.com.consultorio.odonto.infraestrutura.lambda;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
-import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient;
-import tools.jackson.core.type.TypeReference;
-import tools.jackson.databind.json.JsonMapper;
+import software.amazon.awssdk.services.ssm.SsmClient;
+import software.amazon.awssdk.services.ssm.model.Parameter;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -13,53 +12,45 @@ import java.util.Objects;
 import java.util.function.UnaryOperator;
 
 /**
- * Lê os segredos do AWS Secrets Manager. O segredo é um JSON cujas chaves têm os MESMOS nomes das variáveis de
- * ambiente do modo servidor (WHATSAPP_TOKEN_ACESSO, ANTHROPIC_API_KEY, CRIPTO_CHAVE_DADOS, DB_SENHA...), então os
- * marcadores {@code ${VAR:}} do application.yml continuam funcionando sem nenhuma mudança.
+ * Lê os segredos do AWS Systems Manager Parameter Store (parâmetros padrão do tipo SecureString, sem custo, cifrados
+ * com a chave gerenciada {@code aws/ssm}). Cada parâmetro fica em {@code <caminho>/<NOME>}, onde NOME é o MESMO nome
+ * da variável de ambiente do modo servidor (WHATSAPP_TOKEN_ACESSO, ANTHROPIC_API_KEY, CRIPTO_CHAVE_DADOS...), então
+ * os marcadores {@code ${VAR:}} do application.yml continuam funcionando sem nenhuma mudança.
  *
  * <p>Os valores são lidos uma vez, na inicialização da função. Com SnapStart eles ficam no snapshot (cifrado
  * pela AWS): depois de trocar um segredo, publique uma nova versão da função (novo {@code sam deploy}).
  */
 public final class SegredosAws {
 
-    /** Variável de ambiente com o nome ou ARN do segredo. Sem ela, nada é lido (útil em testes locais). */
-    public static final String VARIAVEL_ID_SEGREDO = "ODONTO_SEGREDO_ID";
+    /** Variável de ambiente com o caminho dos parâmetros (ex.: /odonto/segredos). Sem ela, nada é lido. */
+    public static final String VARIAVEL_CAMINHO = "ODONTO_PARAMETROS_CAMINHO";
 
     private static final Logger LOG = LoggerFactory.getLogger(SegredosAws.class);
-    private static final TypeReference<Map<String, Object>> TIPO_MAPA = new TypeReference<>() {
-    };
 
     private SegredosAws() {
     }
 
-    /** Lê o segredo indicado em {@value #VARIAVEL_ID_SEGREDO}; devolve vazio se a variável não existir. */
+    /** Lê os parâmetros sob o caminho indicado em {@value #VARIAVEL_CAMINHO}; vazio se a variável não existir. */
     public static Map<String, String> ler() {
-        String id = System.getenv(VARIAVEL_ID_SEGREDO);
-        if (id == null || id.isBlank()) {
-            LOG.info("{} não definido: segredos virão apenas do ambiente.", VARIAVEL_ID_SEGREDO);
+        String caminho = System.getenv(VARIAVEL_CAMINHO);
+        if (caminho == null || caminho.isBlank()) {
+            LOG.info("{} não definido: segredos virão apenas do ambiente.", VARIAVEL_CAMINHO);
             return Map.of();
         }
-        try (SecretsManagerClient cliente = SecretsManagerClient.builder()
-                .httpClientBuilder(UrlConnectionHttpClient.builder()).build()) {
-            String json = cliente.getSecretValue(r -> r.secretId(id)).secretString();
-            Map<String, String> segredos = interpretar(json);
-            LOG.info("{} segredo(s) carregado(s) do Secrets Manager.", segredos.size());
+        try (SsmClient cliente = SsmClient.builder().httpClientBuilder(UrlConnectionHttpClient.builder()).build()) {
+            Map<String, String> segredos = new LinkedHashMap<>();
+            cliente.getParametersByPathPaginator(r -> r.path(caminho).withDecryption(true).recursive(false))
+                    .stream().flatMap(pagina -> pagina.parameters().stream())
+                    .forEach(p -> segredos.put(nomeCurto(p), p.value()));
+            LOG.info("{} segredo(s) carregado(s) do Parameter Store.", segredos.size());
             return segredos;
         }
     }
 
-    static Map<String, String> interpretar(String json) {
-        if (json == null || json.isBlank()) {
-            return Map.of();
-        }
-        Map<String, Object> bruto = JsonMapper.builder().build().readValue(json, TIPO_MAPA);
-        Map<String, String> segredos = new LinkedHashMap<>();
-        bruto.forEach((chave, valor) -> {
-            if (valor != null) {
-                segredos.put(chave, String.valueOf(valor));
-            }
-        });
-        return segredos;
+    /** Último segmento do nome do parâmetro: {@code /odonto/segredos/CRIPTO_CHAVE_DADOS} vira {@code CRIPTO_CHAVE_DADOS}. */
+    static String nomeCurto(Parameter parametro) {
+        String nome = parametro.name();
+        return nome.substring(nome.lastIndexOf('/') + 1);
     }
 
     /**

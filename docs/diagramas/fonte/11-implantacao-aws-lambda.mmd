@@ -4,24 +4,17 @@ flowchart LR
     equipe(["🦷 Equipe<br/>(API admin)"])
     ia["Anthropic Claude<br/>OpenAI Whisper"]
 
-    subgraph aws["AWS (pilha SAM: aws/template.yaml)"]
+    subgraph aws["AWS (pilha SAM: aws/template.yaml) · sem VPC, sem NAT, sem servidor ligado"]
         direction LR
-        webhook["λ webhook<br/>Function URL pública<br/>valida HMAC, enfileira"]
+        webhook["λ webhook (512 MB)<br/>Function URL pública<br/>valida HMAC, enfileira"]
         fila[["SQS FIFO mensagens<br/>grupo = número do paciente<br/>dedupe = id da mensagem"]]
         dlq[["SQS FIFO falhas<br/>(DLQ, 5 tentativas)"]]
-        segredo[/"Secrets Manager<br/>tokens, chaves, DB_SENHA"/]
-        agenda["EventBridge Scheduler<br/>5 min: expirar conversas<br/>03:30: expurgar mensagens"]
-
-        subgraph vpc["VPC 10.20.0.0/16"]
-            subgraph privada["Sub-redes privadas (2 AZs)"]
-                conversa["λ conversa<br/>máquina de estados"]
-                manutencao["λ manutencao"]
-                admin["λ admin<br/>Function URL (opcional)"]
-                migracao["λ migracao<br/>Flyway (custom resource)"]
-                rds[("RDS PostgreSQL 18<br/>cifrado, backup 7 dias")]
-            end
-            nat["NAT Gateway<br/>(sub-rede pública)"]
-        end
+        segredo[/"SSM Parameter Store<br/>/pilha/segredos/*<br/>SecureString (aws/ssm)"/]
+        agenda["EventBridge Scheduler<br/>15 min: expirar conversas<br/>03:30: expurgar mensagens"]
+        conversa["λ conversa (1 GB)<br/>máquina de estados<br/>até 2 em paralelo"]
+        manutencao["λ manutencao"]
+        admin["λ admin<br/>Function URL (opcional)"]
+        tabela[("DynamoDB sob demanda<br/>tabela única pilha-dados<br/>PITR 35 dias · proteção contra exclusão")]
     end
 
     paciente <--> meta
@@ -30,13 +23,11 @@ flowchart LR
     fila -->|"lotes de até 10"| conversa
     fila -.->|"após 5 falhas"| dlq
     agenda --> manutencao
-    conversa --> rds
-    manutencao --> rds
-    admin --> rds
-    migracao -->|"no deploy"| rds
+    conversa --> tabela
+    manutencao --> tabela
+    admin --> tabela
     equipe -->|"Bearer ADMIN_TOKEN"| admin
-    conversa --> nat
-    nat -->|"respostas e avisos"| meta
-    nat --> ia
+    conversa -->|"respostas e avisos (internet direta)"| meta
+    conversa --> ia
     segredo -.->|"lido na inicialização<br/>(fica no snapshot SnapStart)"| conversa
     segredo -.-> webhook

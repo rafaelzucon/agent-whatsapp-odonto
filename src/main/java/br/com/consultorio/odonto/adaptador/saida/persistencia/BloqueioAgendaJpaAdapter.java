@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Optional;
 
 @Repository
+@PersistenciaJpa
 @Transactional(readOnly = true)
 public class BloqueioAgendaJpaAdapter implements BloqueioAgendaRepositorio {
 

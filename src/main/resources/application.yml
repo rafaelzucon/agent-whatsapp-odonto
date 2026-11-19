@@ -1,6 +1,6 @@
 # Configuração do Agente WhatsApp Odonto.
 # Valores sensíveis vêm SEMPRE de fora do arquivo; nunca coloque segredos aqui. No modo servidor (Docker), de
-# variáveis de ambiente (veja .env.example); no modo AWS Lambda, do AWS Secrets Manager, com as mesmas chaves
+# variáveis de ambiente (veja .env.example); no modo AWS Lambda, do SSM Parameter Store, com as mesmas chaves
 # (veja aws/ e o perfil "lambda" no fim deste arquivo).
 
 spring:
@@ -113,6 +113,8 @@ logging:
 odonto:
   # servidor (padrão: Tomcat + tarefas @Scheduled) ou lambda (definido pelo perfil "lambda").
   execucao: servidor
+  # jpa (padrão: PostgreSQL com Flyway) ou dynamodb (definido pelo perfil "lambda": sem servidor de banco).
+  persistencia: jpa
   nome-consultorio: ${CONSULTORIO_NOME:Consultório Odontológico}
   endereco: ${CONSULTORIO_ENDERECO:Rua Exemplo, 123 - Centro}
   fuso-horario: ${CONSULTORIO_FUSO:America/Sao_Paulo}
@@ -240,7 +242,8 @@ odonto:
 
 ---
 # Perfil "lambda": ativado pelos handlers de br.com.consultorio.odonto.infraestrutura.lambda (AWS Lambda com
-# SnapStart). Nada aqui pode abrir conexão com o banco na inicialização, que é capturada no snapshot.
+# SnapStart). A persistência passa a ser o DynamoDB sob demanda (paga por requisição, sem servidor nem VPC), então
+# JDBC, Hibernate e Flyway ficam desligados. Nada aqui pode chamar a AWS na inicialização, capturada no snapshot.
 spring:
   config:
     activate:
@@ -248,26 +251,27 @@ spring:
   main:
     keep-alive: false
     banner-mode: "off"
-  # As migrações rodam como passo da implantação (MigracaoHandler), não na partida de cada função.
-  flyway:
-    enabled: false
-  datasource:
-    hikari:
-      # Poucas conexões por instância; a concorrência é limitada no template (MaximumConcurrency da fila).
-      maximum-pool-size: ${DB_POOL_MAXIMO:2}
-      minimum-idle: 0
-  jpa:
-    hibernate:
-      ddl-auto: none
-    properties:
-      hibernate:
-        boot:
-          allow_jdbc_metadata_access: false
-      # Sem consultar o banco, o Hibernate precisa saber a versão do PostgreSQL (o RDS do template usa a 18).
-      jakarta:
-        persistence:
-          database-product-name: PostgreSQL
-          database-product-version: "18.0"
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceInitializationAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceTransactionManagerAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.JdbcClientAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.JdbcTemplateAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.health.DataSourceHealthContributorAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.metrics.DataSourcePoolMetricsAutoConfiguration
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+      - org.springframework.boot.hibernate.autoconfigure.metrics.HibernateMetricsAutoConfiguration
+      - org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration
+      - org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration
+      - org.springframework.boot.flyway.autoconfigure.FlywayEndpointAutoConfiguration
 
 odonto:
   execucao: lambda
+  persistencia: dynamodb
+  dynamodb:
+    # Tabela única criada pelo template SAM (aws/template.yaml).
+    tabela: ${DYNAMODB_TABELA:}
+    regiao: ${AWS_REGION:sa-east-1}
+    # Só para testes locais (DynamoDB Local); vazio usa o endpoint da AWS.
+    endpoint: ${DYNAMODB_ENDPOINT:}
